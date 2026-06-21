@@ -1,42 +1,33 @@
-<p align="center">
-  <img src="assets/logo.svg" width="380" alt="llmux — the LLM multiplexer" />
-</p>
+<div align="center">
 
-<h3 align="center">One OpenAI-compatible gateway for every provider, in every language.</h3>
+<img src="assets/logo-mark.svg" alt="llmux" width="104" />
 
-<p align="center">
-  A single Go binary that speaks the OpenAI API and routes to any LLM behind it —<br/>
-  routing, fallbacks, budgets, caching, and live cost, with zero per-language code.
-</p>
+# llmux
 
-<p align="center">
-  <img src="https://img.shields.io/badge/license-MIT-4fe3c8?style=flat-square" alt="MIT" />
-  <img src="https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.25" />
-  <img src="https://img.shields.io/badge/tests-349%20passing-ff9a4d?style=flat-square" alt="tests" />
-  <img src="https://img.shields.io/badge/%2Drace-clean-4fe3c8?style=flat-square" alt="race clean" />
-  <img src="https://img.shields.io/badge/binary-single%20static-ff9a4d?style=flat-square" alt="single binary" />
-</p>
+**The Vulos LLM gateway — one OpenAI-compatible endpoint for every provider, in every language.**
 
-<p align="center">
-  <a href="#quickstart"><b>Quickstart</b></a> ·
-  <a href="#features">Features</a> ·
-  <a href="#where-llmux-fits">Comparison</a> ·
-  <a href="SUPPORT.md">Providers</a> ·
-  <a href="PARITY.md">Parity</a> ·
-  <a href="https://llmux.to">Cloud</a>
-</p>
+[![License: MIT](https://img.shields.io/badge/License-MIT-0f6a6c.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.1.0-informational)](PARITY.md)
+[![Build](https://img.shields.io/badge/build-passing-4f7a4d)](https://github.com/vul-os/llmux/actions)
+[![Tests](https://img.shields.io/badge/tests-349%20passing-0f6a6c)](TESTING.md)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://golang.org)
+[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev)
 
-<p align="center">
-  <img src="assets/landing.jpg" width="880" alt="llmux landing" />
-</p>
+*Vulos — rooted in **vula**, the Zulu and Xhosa word for **open**.*
+
+<sub>Part of the <strong><a href="https://vulos.org">Vulos</a></strong> OS suite — alongside <a href="https://github.com/vul-os/vulos-office">Office</a> &amp; <a href="https://github.com/vul-os/vulos-mail">Mail</a></sub>
+
+![llmux](assets/landing.jpg)
+
+</div>
 
 ---
 
-llmux works in **every language on day one with zero per-language code**. Every
-ecosystem already ships a mature OpenAI client that accepts a custom `base_url` —
-point it at llmux and you get a control plane underneath: provider routing,
-fallback chains, per-key budgets, response caching, and real cost in every
-response.
+## Overview
+
+llmux is a single Go binary that speaks the **OpenAI-compatible HTTP API** and routes to any LLM provider behind it. Because every language already ships a mature OpenAI client that accepts a custom `base_url`, llmux works in **every language on day one with zero per-language code** — point your existing OpenAI SDK at llmux and get routing, fallbacks, budgets, caching, and live cost underneath.
+
+It carries the Vulos spirit — self-hosted, open source, no telemetry, no lock-in — into the LLM layer: a control plane you run, not a service you rent.
 
 ```text
   any-language app ──(OpenAI SDK, base_url = llmux)──▶  ┌─────────┐ ──▶ OpenAI
@@ -46,13 +37,25 @@ response.
                                                         └─────────┘ ──▶ 100+ via passthrough
 ```
 
+> *"Vula" — open the door. llmux opens it to every model.*
+
 ---
 
-## Quickstart
+## Screenshots
+
+| Dashboard | Docs |
+|-----------|------|
+| ![Dashboard](assets/dashboard.jpg) | ![Docs](assets/docs.jpg) |
+
+A web dashboard **and** rendered docs ship **inside the binary** at `/ui` (embedded via `go:embed`) — usage by model, virtual-key budgets, and the live price catalog. No separate service to run.
+
+---
+
+## Quick start
 
 ```bash
 make build
-export OPENAI_API_KEY=...        # providers are auto-detected from env
+export OPENAI_API_KEY=...        # providers auto-detected from env
 export ANTHROPIC_API_KEY=...
 ./dist/llmux                     # gateway on :4000  (dashboard at /ui)
 ```
@@ -71,8 +74,7 @@ client.chat.completions.create(
 
 ### Or embed it locally — no server to run
 
-Each language package bundles the binary and starts it as a local sidecar (Go
-runs it in-process). Integrate in any language without standing up a server:
+Each language package bundles the binary and starts it as a local sidecar (Go runs it in-process):
 
 ```python
 import llmux
@@ -94,18 +96,7 @@ defer local.Close()
 
 See [`sdks/`](sdks/) for details.
 
----
-
-## Built-in dashboard & live docs
-
-A web dashboard **and** rendered docs ship **inside the binary** at `/ui` — no
-separate Node server at runtime. Usage by model, virtual-key budgets, and the
-live price catalog, embedded via `go:embed`.
-
-<p align="center">
-  <img src="assets/dashboard.jpg" width="49%" alt="llmux dashboard" />
-  <img src="assets/docs.jpg" width="49%" alt="llmux docs" />
-</p>
+> **Codebase rule:** the web app uses `.jsx` only — never `.tsx`.
 
 ---
 
@@ -120,16 +111,13 @@ live price catalog, embedded via `go:embed`.
 | **Governance** | Virtual keys with per-key budgets, rate limits, and model allow-lists; spend in Postgres, limits in Redis |
 | **Caching** | Exact-match (LRU + TTL) **and** semantic (embedding-similarity); in-memory or shared via Redis |
 | **Hardening** | Cancellation, upstream timeouts, body limits, rate-limit header relay, OpenAI-canonical error normalization, `drop_params` |
-| **Ops** | Prometheus `/metrics`, structured logs + `X-Request-ID`, JSONL usage log, admin endpoints, health check, single static binary, Docker |
-| **Dashboard** | Vite + React app (landing · docs · admin) embedded in the binary at `/ui` |
+| **Single binary** | Go embeds the entire web UI — one file to deploy. Prometheus `/metrics`, structured logs, health check, Docker |
 
 ---
 
 ## Where llmux fits
 
-Honest positioning. llmux is best-in-class for **self-hosted, single-binary**
-deployments and is engineered for correctness — but it is younger than the
-incumbents on breadth and battle-testing, and we say so.
+Honest positioning. llmux is best-in-class for **self-hosted, single-binary** deployments and is engineered for correctness — but it is younger than the incumbents on breadth and battle-testing, and we say so.
 
 | Capability | llmux | LiteLLM | OpenRouter |
 |---|:---:|:---:|:---:|
@@ -142,17 +130,13 @@ incumbents on breadth and battle-testing, and we say so.
 | Provider breadth | ◑ 6 + passthrough | ✅ 100+ | ✅ 300+ |
 | Battle-tested maturity | ◑ new | ✅ | ✅ |
 
-> ✅ yes · ◑ partial · ❌ no. Adapters ship **beta/experimental** until verified
-> against live provider APIs — see [PARITY.md](PARITY.md).
+> ✅ yes · ◑ partial · ❌ no. Adapters ship **beta/experimental** until verified against live provider APIs — see [PARITY.md](PARITY.md).
 
 ---
 
 ## Why gateway-first
 
-LiteLLM is **library-first** (a Python SDK), which structurally traps it in
-Python. llmux is **gateway-first**: the OpenAI HTTP schema is the canonical
-interface, providers are adapters behind it, and the language ecosystems already
-wrote the clients. We write the gateway once; you get every language free.
+LiteLLM is **library-first** (a Python SDK), which structurally traps it in Python. llmux is **gateway-first**: the OpenAI HTTP schema is the canonical interface, providers are adapters behind it, and the language ecosystems already wrote the clients. We write the gateway once; you get every language free.
 
 Three rules keep "any language" true as features grow:
 
@@ -164,32 +148,15 @@ Three rules keep "any language" true as features grow:
 
 ## Pricing catalog — free, live, and route-correct
 
-A seed ships built-in so cost works offline. At runtime llmux auto-syncs from
-pluggable **sources** and merges them by **precedence** so cost is correct per route:
+A seed ships built-in so cost works offline. At runtime llmux auto-syncs from pluggable **sources** and merges them by **precedence** so cost is correct per route:
 
 ```text
 override (manual pin) > provider pricing API > LiteLLM (direct) > OpenRouter (margin) > built-in seed
 ```
 
-- **Route-aware:** a call routed *through* OpenRouter is costed at its
-  margin-inclusive price; a **direct** BYO-key call prefers the authoritative
-  direct price — so you're never over-charged on direct routes.
+- **Route-aware:** a call routed *through* OpenRouter is costed at its margin-inclusive price; a **direct** BYO-key call prefers the authoritative direct price.
 - **Manual overrides** (inline or hot-reloaded JSON) always win.
-- **Disk cache** for instant warm starts and offline survival.
 - **Open export:** `GET /v1/catalog.json` republishes the merged catalog.
-
----
-
-## API
-
-| Endpoint | Purpose |
-|---|---|
-| `POST /v1/chat/completions` | chat — streaming + non-streaming |
-| `POST /v1/embeddings` | embeddings |
-| `POST /v1/completions` · `/moderations` · `/images/generations` · `/audio/speech` · `/rerank` · `/responses` | modality routes (forwarded) |
-| `GET /v1/models` | catalog-backed model list with pricing + capabilities |
-| `GET /v1/catalog.json` | merged price catalog export |
-| `GET /health` · `GET /metrics` | health + Prometheus metrics |
 
 ---
 
@@ -207,13 +174,12 @@ core/                MIT — the open gateway
   cache/             exact + semantic response cache
   pricing/           catalog + live sync + cost
 cmd/llmux/           the binary (server + local sidecar)
-web/                 Vite + React UI (embedded at /ui)
+web/                 Vite + React UI (Vulos design system, embedded at /ui)
 sdks/                thin language packages (python, node, go)
 ee/                  enterprise/cloud (open-core)
 ```
 
-The **same binary** is both the hosted server and the locally-embedded sidecar —
-one codebase, two distribution modes.
+The **same binary** is both the hosted server and the locally-embedded sidecar — one codebase, two distribution modes.
 
 ---
 
@@ -230,6 +196,12 @@ make docker     # build the Docker image
 
 ## License
 
-**MIT** — see [LICENSE](LICENSE). The whole project is open source under MIT;
-monetization is the hosted **[llmux Cloud](https://llmux.to)**, not a different
-code license. See [ee/README.md](ee/README.md) for the Cloud/enterprise direction.
+[MIT](LICENSE) — free to use, modify, and distribute. The whole project is open source under MIT; monetization is **[Vulos Cloud](https://vulos.org)**, not a different code license.
+
+---
+
+<div align="center">
+
+Made with care · Powered by open source · *Vula — open*
+
+</div>

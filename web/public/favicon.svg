@@ -1,25 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <title>llmux</title>
   <defs>
-    <linearGradient id="a" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ffbd87"/><stop offset="1" stop-color="#ff9a4d"/>
-    </linearGradient>
-    <linearGradient id="c" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#ff9a4d"/><stop offset="1" stop-color="#4fe3c8"/>
+    <linearGradient id="vg" x1="12" y1="8" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#19a3a6"/><stop offset="1" stop-color="#C96AFF"/>
     </linearGradient>
   </defs>
-  <rect width="32" height="32" rx="8" fill="#0a0c11"/>
-  <rect x="0.75" y="0.75" width="30.5" height="30.5" rx="7.25" fill="none" stroke="#2b3343" stroke-width="1.5"/>
-  <g stroke="url(#a)" stroke-width="1.8" fill="none" stroke-linecap="round">
-    <path d="M5 8 C12 8 12 14.6 15 14.8"/>
-    <path d="M5 13 C10 13 13 15.2 15 15.4"/>
-    <path d="M5 20 C10 20 13 16.8 15 16.6"/>
-    <path d="M5 25 C12 25 12 17.4 15 17.2"/>
+  <rect x="6" y="6" width="52" height="52" rx="14" fill="url(#vg)" opacity="0.14"/>
+  <rect x="6" y="6" width="52" height="52" rx="14" fill="none" stroke="url(#vg)" stroke-width="2.5"/>
+  <g fill="url(#vg)">
+    <circle cx="6" cy="24" r="2.6"/><circle cx="6" cy="32" r="2.6"/><circle cx="6" cy="40" r="2.6"/>
+    <circle cx="58" cy="32" r="2.6"/>
   </g>
-  <g fill="url(#a)">
-    <circle cx="5" cy="8" r="1.5"/><circle cx="5" cy="13" r="1.5"/>
-    <circle cx="5" cy="20" r="1.5"/><circle cx="5" cy="25" r="1.5"/>
+  <g transform="translate(20.5 16) scale(0.62)" fill="url(#vg)">
+    <path d="M25.946 44.938c-.664.845-2.021.375-2.021-.698V33.937a2.26 2.26 0 0 0-2.262-2.262H10.287c-.92 0-1.456-1.04-.92-1.788l7.48-10.471c1.07-1.497 0-3.578-1.842-3.578H1.237c-.92 0-1.456-1.04-.92-1.788L10.013.474c.214-.297.556-.474.92-.474h28.894c.92 0 1.456 1.04.92 1.788l-7.48 10.471c-1.07 1.498 0 3.579 1.842 3.579h11.377c.943 0 1.473 1.088.89 1.83L25.947 44.94z"/>
   </g>
-  <path d="M15 7 L23 11.5 L23 20.5 L15 25 Z" fill="#161a23" stroke="url(#a)" stroke-width="1.8" stroke-linejoin="round"/>
-  <path d="M23 16 H29" stroke="url(#c)" stroke-width="1.9" stroke-linecap="round"/>
-  <circle cx="29" cy="16" r="1.9" fill="#4fe3c8"/>
 </svg>

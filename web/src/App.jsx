@@ -8,7 +8,8 @@ import Landing from "./pages/Landing.jsx";
 const Docs = lazy(() => import("./pages/Docs.jsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.jsx"));
 
-const GH = "https://github.com/llmux/llmux";
+const GH = "https://github.com/vul-os/llmux";
+const VULOS = "https://vulos.org";
 
 function GitHubIcon() {
   return (
@@ -26,7 +27,7 @@ export default function App() {
         <div className="wrap topbar-inner">
           <Link to="/" aria-label="llmux home" className="brand">
             <Logo />
-            <span className="brand-badge">v0.1 · MIT</span>
+            <span className="brand-badge">Vulos</span>
           </Link>
 
           <nav className="nav" aria-label="Primary">
@@ -38,8 +39,8 @@ export default function App() {
             <a className="nav-icon hide-sm" href={GH} target="_blank" rel="noreferrer" aria-label="GitHub">
               <GitHubIcon /><span>Star</span>
             </a>
-            <a className="btn primary sm" href="https://llmux.to" target="_blank" rel="noreferrer">
-              Cloud <span aria-hidden="true">→</span>
+            <a className="btn primary sm" href={VULOS} target="_blank" rel="noreferrer">
+              Vulos Cloud <span aria-hidden="true">→</span>
             </a>
           </nav>
         </div>
@@ -59,7 +60,7 @@ export default function App() {
         <div className="wrap footer-inner">
           <div className="footer-brand">
             <Logo />
-            <p>One OpenAI-compatible gateway for every provider, in every language. A single Go binary — routing, fallbacks, budgets, caching, and live cost.</p>
+            <p>One OpenAI-compatible gateway for every provider, in every language. A single Go binary — routing, fallbacks, budgets, caching, and live cost. Part of the Vulos OS suite.</p>
             <span className="status"><span className="status-dot" /> open source · self-host free forever</span>
           </div>
           <div className="footer-cols">
@@ -67,7 +68,7 @@ export default function App() {
               <h4>Product</h4>
               <Link to="/docs">Documentation</Link>
               <Link to="/app">Dashboard</Link>
-              <a href="https://llmux.to" target="_blank" rel="noreferrer">llmux Cloud</a>
+              <a href={VULOS} target="_blank" rel="noreferrer">Vulos Cloud</a>
             </div>
             <div className="footer-col">
               <h4>Develop</h4>
@@ -76,16 +77,16 @@ export default function App() {
               <Link to="/docs/providers">Providers</Link>
             </div>
             <div className="footer-col">
-              <h4>Resources</h4>
-              <Link to="/docs/routing">Routing</Link>
-              <Link to="/docs/pricing">Pricing</Link>
-              <a href={`${GH}/blob/main/LICENSE`} target="_blank" rel="noreferrer">MIT License</a>
+              <h4>Vulos</h4>
+              <a href={VULOS} target="_blank" rel="noreferrer">vulos.org</a>
+              <a href="https://github.com/vul-os/vulos-office" target="_blank" rel="noreferrer">Vulos Office</a>
+              <a href="https://github.com/vul-os/vulos-mail" target="_blank" rel="noreferrer">Vulos Mail</a>
             </div>
           </div>
         </div>
         <div className="wrap footer-base">
-          <span>© {new Date().getFullYear()} llmux · MIT licensed</span>
-          <span className="footer-mono">$ curl localhost:4000/v1/chat/completions</span>
+          <span>© {new Date().getFullYear()} llmux · MIT · <span className="footer-vula">Vula — open</span></span>
+          <span className="footer-mono">Part of the Vulos OS suite</span>
         </div>
       </footer>
     </div>

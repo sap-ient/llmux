@@ -1,49 +1,27 @@
 import { useId } from "react";
 
-// llmux mark — a multiplexer: N input channels converge into the mux gate and
-// leave as one. A signal pulse rides the output cable (pauses on reduced-motion).
-export function Mark({ size = 28 }) {
-  const id = useId().replace(/:/g, "");
-  const a = `a-${id}`, c = `c-${id}`, g = `g-${id}`;
+// llmux mark — the canonical Vulos lightning bolt inside a routing tile, with
+// many input ports → one output port (the multiplexer). Brand gradient
+// (teal → purple) is fixed so the mark is identical in light and dark.
+export function Mark({ size = 30 }) {
+  const id = "vg-" + useId().replace(/:/g, "");
   return (
-    <svg className="mark" width={size} height={size} viewBox="0 0 36 36" fill="none" aria-hidden="true">
+    <svg className="mark" width={size} height={size} viewBox="0 0 64 64" fill="none" aria-hidden="true">
       <defs>
-        <linearGradient id={a} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="var(--signal-soft)" />
-          <stop offset="1" stopColor="var(--signal)" />
+        <linearGradient id={id} x1="12" y1="8" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#19a3a6" />
+          <stop offset="1" stopColor="#C96AFF" />
         </linearGradient>
-        <linearGradient id={c} x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stopColor="var(--signal)" />
-          <stop offset="1" stopColor="var(--mint)" />
-        </linearGradient>
-        <filter id={g} x="-80%" y="-80%" width="260%" height="260%">
-          <feGaussianBlur stdDeviation="1.1" result="b" />
-          <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
-        </filter>
       </defs>
-
-      {/* inputs converging into the gate */}
-      <g stroke={`url(#${a})`} strokeWidth="1.9" fill="none" strokeLinecap="round">
-        <path d="M4 7 C13 7 13 16.4 17 16.6" />
-        <path d="M4 13 C11 13 14 17 17 17.2" />
-        <path d="M4 23 C11 23 14 19 17 18.8" />
-        <path d="M4 29 C13 29 13 19.6 17 19.4" />
+      <rect x="6" y="6" width="52" height="52" rx="14" fill={`url(#${id})`} opacity="0.12" />
+      <rect x="6" y="6" width="52" height="52" rx="14" fill="none" stroke={`url(#${id})`} strokeWidth="2.5" />
+      <g fill={`url(#${id})`}>
+        <circle cx="6" cy="24" r="2.6" /><circle cx="6" cy="32" r="2.6" /><circle cx="6" cy="40" r="2.6" />
+        <circle cx="58" cy="32" r="2.6" />
       </g>
-      <g fill={`url(#${a})`}>
-        <circle cx="4" cy="7" r="1.8" /><circle cx="4" cy="13" r="1.8" />
-        <circle cx="4" cy="23" r="1.8" /><circle cx="4" cy="29" r="1.8" />
+      <g transform="translate(20.5 16) scale(0.62)" fill={`url(#${id})`}>
+        <path d="M25.946 44.938c-.664.845-2.021.375-2.021-.698V33.937a2.26 2.26 0 0 0-2.262-2.262H10.287c-.92 0-1.456-1.04-.92-1.788l7.48-10.471c1.07-1.497 0-3.578-1.842-3.578H1.237c-.92 0-1.456-1.04-.92-1.788L10.013.474c.214-.297.556-.474.92-.474h28.894c.92 0 1.456 1.04.92 1.788l-7.48 10.471c-1.07 1.498 0 3.579 1.842 3.579h11.377c.943 0 1.473 1.088.89 1.83L25.947 44.94z" />
       </g>
-
-      {/* mux gate */}
-      <path d="M17 8 L26 13 L26 23 L17 28 Z" fill="var(--ink-3)" stroke={`url(#${a})`} strokeWidth="1.9" strokeLinejoin="round" />
-
-      {/* output channel + node + travelling pulse */}
-      <path d="M26 18 H33" stroke={`url(#${c})`} strokeWidth="2" strokeLinecap="round" />
-      <circle cx="33" cy="18" r="2.1" fill="var(--mint)" filter={`url(#${g})`} />
-      <circle className="logo-pulse" r="1.5" fill="var(--mint-soft)">
-        <animateMotion dur="2.2s" repeatCount="indefinite" path="M17.5 18 H33" keyPoints="0;0;1;1" keyTimes="0;0.35;0.7;1" calcMode="linear" />
-        <animate attributeName="opacity" dur="2.2s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.34;0.4;0.66;0.72;1" />
-      </circle>
     </svg>
   );
 }
@@ -51,7 +29,7 @@ export function Mark({ size = 28 }) {
 export function Logo() {
   return (
     <span className="logo">
-      <span className="logo-mark"><Mark /></span>
+      <span className="logo-mark"><Mark size={30} /></span>
       <span className="word">llmu<span className="x">x</span></span>
     </span>
   );

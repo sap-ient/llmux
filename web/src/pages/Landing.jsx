@@ -127,7 +127,7 @@ export default function Landing() {
         <div className="wrap hero-grid">
           <div>
             <motion.div className="hero-pill" variants={up} custom={0} initial="hidden" animate="show">
-              <span className="pip" /> open source · MIT · <b>the LLM multiplexer</b>
+              <span className="pip" /> part of <b>Vulos</b> · open source · the LLM gateway
             </motion.div>
             <motion.h1 variants={up} custom={1} initial="hidden" animate="show">
               Every model.<br />Every language.<br /><span className="out grad-text">One channel.</span>
