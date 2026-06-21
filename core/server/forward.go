@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/llmux/llmux/core/openai"
 	"github.com/llmux/llmux/core/provider"
@@ -73,7 +75,32 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, suffix st
 		return
 	}
 	defer fr.Body.Close()
-	copyForward(w, fr)
+	status := fr.Status
+	// Relay the response while tapping any usage the upstream reported, then meter
+	// it. Modality routes (/v1/completions, /v1/responses, images, moderations,
+	// audio, rerank) were gated but billed nobody; now every SERVED forward emits
+	// a usage record so it is auditable even when the catalog has no price (the
+	// record then carries tokens=0, cost=0, with the model). Upstream errors carry
+	// no spend, so they are relayed but not metered.
+	usage := copyForwardMetered(w, fr)
+	if status < 200 || status >= 300 {
+		return
+	}
+	if usage == nil {
+		usage = &openai.Usage{}
+	}
+	s.attachCost(model, t.Provider.Name(), usage)
+	s.recordSpend(r.Context(), usage)
+	s.logUsage(r.Context(), model, isStreamRequest(raw), false, usage)
+}
+
+// isStreamRequest best-effort reports whether the request body asked to stream.
+func isStreamRequest(raw []byte) bool {
+	var m struct {
+		Stream bool `json:"stream"`
+	}
+	_ = json.Unmarshal(raw, &m)
+	return m.Stream
 }
 
 // extractModel reads the "model" field from a JSON body, best-effort.
@@ -90,8 +117,16 @@ func rewriteModelField(raw []byte, target string) []byte {
 	return provider.SetJSONFields(raw, map[string]any{"model": target})
 }
 
-// copyForward relays the upstream response, streaming the body (flushing for SSE).
-func copyForward(w http.ResponseWriter, fr *provider.ForwardResponse) {
+// maxMeterTapBytes bounds how much of a forwarded response we retain to parse
+// usage. Usage objects are tiny; capping keeps metering memory-safe for large
+// (e.g. image/base64) bodies. Beyond the cap we stop tapping but keep relaying.
+const maxMeterTapBytes = 1 << 20 // 1 MiB
+
+// copyForwardMetered relays the upstream response byte-for-byte (flushing for
+// SSE) while tapping a bounded copy of the body so it can parse any reported
+// usage. It returns the parsed usage, or nil when the upstream reported none.
+// Relaying is never blocked or altered by the tap.
+func copyForwardMetered(w http.ResponseWriter, fr *provider.ForwardResponse) *openai.Usage {
 	for k, vs := range fr.Header {
 		if hopByHop(k) {
 			continue
@@ -102,6 +137,8 @@ func copyForward(w http.ResponseWriter, fr *provider.ForwardResponse) {
 	}
 	w.WriteHeader(fr.Status)
 	flusher, _ := w.(http.Flusher)
+
+	var tap bytes.Buffer
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := fr.Body.Read(buf)
@@ -110,11 +147,82 @@ func copyForward(w http.ResponseWriter, fr *provider.ForwardResponse) {
 			if flusher != nil {
 				flusher.Flush()
 			}
+			if tap.Len() < maxMeterTapBytes {
+				tap.Write(buf[:n])
+			}
 		}
 		if err != nil {
-			return
+			break
 		}
 	}
+	// Only meter usage on a successful upstream status (errors carry no spend).
+	if fr.Status < 200 || fr.Status >= 300 {
+		return nil
+	}
+	return extractUsage(tap.Bytes())
+}
+
+// extractUsage finds an OpenAI-style usage object in a forwarded response body.
+// It handles both a plain JSON object (completions/responses/moderations) and an
+// SSE stream (it scans data: lines for the chunk that carries usage). Returns
+// nil when no usage is present (e.g. images/audio, which the caller then records
+// as a zero-token auditable line).
+func extractUsage(body []byte) *openai.Usage {
+	if u := usageFromJSON(body); u != nil {
+		return u
+	}
+	// SSE: usage rides on a trailing data: line.
+	var found *openai.Usage
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		data, ok := strings.CutPrefix(line, "data:")
+		if !ok {
+			continue
+		}
+		data = strings.TrimSpace(data)
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		if u := usageFromJSON([]byte(data)); u != nil {
+			found = u // keep the last one seen (the final usage chunk)
+		}
+	}
+	return found
+}
+
+// usageFromJSON decodes the top-level "usage" object from a JSON document, if
+// present and non-empty. /v1/responses nests its counts differently, so it also
+// accepts input_tokens/output_tokens.
+func usageFromJSON(raw []byte) *openai.Usage {
+	var doc struct {
+		Usage *struct {
+			openai.Usage
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+			TotalTokens  int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil || doc.Usage == nil {
+		return nil
+	}
+	u := doc.Usage.Usage
+	// /v1/responses: map input/output token names onto the canonical fields.
+	if u.PromptTokens == 0 && doc.Usage.InputTokens > 0 {
+		u.PromptTokens = doc.Usage.InputTokens
+	}
+	if u.CompletionTokens == 0 && doc.Usage.OutputTokens > 0 {
+		u.CompletionTokens = doc.Usage.OutputTokens
+	}
+	if u.TotalTokens == 0 {
+		u.TotalTokens = doc.Usage.TotalTokens
+	}
+	if u.TotalTokens == 0 && (u.PromptTokens > 0 || u.CompletionTokens > 0) {
+		u.TotalTokens = u.PromptTokens + u.CompletionTokens
+	}
+	if u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0 {
+		return nil
+	}
+	return &u
 }
 
 // hopByHop reports whether a header should not be forwarded.

@@ -57,8 +57,17 @@ type BudgetDecision struct {
 	// ever set on an EXPLICIT deny from the authority (static over-budget, or a
 	// cp answer of !llm_enabled || suspended || remaining<=0).
 	Denied bool
+	// RateLimited is true when the request is rejected for exceeding the
+	// principal's request-rate cap (HTTP 429), not budget. Mutually exclusive
+	// with Denied in practice; checked first by the server.
+	RateLimited bool
 	// Reason is a short human label for the denial (used in the error body).
 	Reason string
+	// Release, when non-nil, frees any reservation/hold the gate placed for an
+	// ALLOWED request. The server calls it exactly once after the request
+	// completes (whatever the outcome). Gates that hold no reservation leave it
+	// nil. It must be safe to call on a zero value via releaseDecision.
+	Release func()
 }
 
 // BudgetGate gates a request by the principal's LLM budget / entitlements.
@@ -101,6 +110,14 @@ func (s staticBudgetGate) Check(_ context.Context, p Principal) BudgetDecision {
 		return BudgetDecision{Denied: true, Reason: "budget exceeded for key " + name}
 	}
 	return BudgetDecision{}
+}
+
+// releaseDecision frees any reservation a gate placed for an allowed request.
+// nil-safe so the static gate (which holds nothing) needs no Release.
+func releaseDecision(d BudgetDecision) {
+	if d.Release != nil {
+		d.Release()
+	}
 }
 
 // SetIdentity overrides the request-identity resolver (e.g. with the cp

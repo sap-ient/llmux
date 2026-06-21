@@ -44,5 +44,14 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	if resp.Model == "" {
 		resp.Model = req.Model
 	}
+	// Meter embeddings exactly like chat: compute dollar cost from the pricing
+	// catalog (route-aware on the provider used), charge the budget, and log the
+	// usage record. Previously embeddings were budget-gated but never metered.
+	if resp.Usage == nil {
+		resp.Usage = &openai.Usage{}
+	}
+	s.attachCost(req.Model, t.Provider.Name(), resp.Usage)
+	s.recordSpend(r.Context(), resp.Usage)
+	s.logUsage(r.Context(), req.Model, false, false, resp.Usage)
 	writeJSON(w, http.StatusOK, resp)
 }

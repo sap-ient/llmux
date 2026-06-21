@@ -114,10 +114,24 @@ func relayHeaders(w http.ResponseWriter, sink *provider.HeaderSink) {
 }
 
 func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req *openai.ChatCompletionRequest, raw []byte, res router.Resolution) {
+	// Force upstream to emit a final usage chunk so streaming chat is ALWAYS
+	// metered. Previously usage was only recorded when the client opted in via
+	// stream_options.include_usage; otherwise count=0 billed nobody. We inject
+	// include_usage server-side (in both the typed request and the raw body the
+	// passthrough providers forward verbatim) and, as a belt-and-braces fallback
+	// for upstreams that still omit usage, estimate tokens from the streamed text.
+	req.Stream = true
+	if req.StreamOptions == nil {
+		req.StreamOptions = &openai.StreamOptions{}
+	}
+	req.StreamOptions.IncludeUsage = true
+	raw = provider.SetJSONFields(raw, map[string]any{"stream_options": map[string]any{"include_usage": true}})
+
 	var sse *sseWriter
 	started := false
 	var lastUsage *openai.Usage
 	var usedProvider string
+	var contentChars int // accumulated streamed text, for the fallback estimate
 
 	makeYield := func(provName string) func(*openai.ChatCompletionChunk) error {
 		return func(chunk *openai.ChatCompletionChunk) error {
@@ -135,6 +149,9 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req *openai.
 			}
 			if chunk.Object == "" {
 				chunk.Object = "chat.completion.chunk"
+			}
+			for _, ch := range chunk.Choices {
+				contentChars += len(ch.Delta.Content)
 			}
 			if chunk.Usage != nil {
 				s.attachCost(req.Model, usedProvider, chunk.Usage)
@@ -171,6 +188,13 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req *openai.
 	}
 
 	if started {
+		// Fallback: upstream sent no usage chunk despite include_usage. Estimate
+		// tokens (prompt from the request text, completion from streamed content)
+		// so the stream is still metered rather than billed as free.
+		if lastUsage == nil {
+			lastUsage = estimateStreamUsage(req, contentChars)
+			s.attachCost(req.Model, usedProvider, lastUsage)
+		}
 		s.recordSpend(r.Context(), lastUsage)
 		s.logUsage(r.Context(), req.Model, true, false, lastUsage)
 		sse.done()
@@ -180,6 +204,34 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req *openai.
 	if s2, ok := newSSEWriter(w); ok {
 		s2.done()
 	}
+}
+
+// estimateStreamUsage approximates token usage for a streamed completion when
+// the upstream omitted a usage chunk despite include_usage. It uses the common
+// ~4-chars-per-token heuristic: prompt from the request message text, completion
+// from the accumulated streamed content. This is a deliberate floor so streaming
+// is never billed as zero; an upstream that reports real usage always wins.
+func estimateStreamUsage(req *openai.ChatCompletionRequest, completionChars int) *openai.Usage {
+	promptChars := 0
+	for _, m := range req.Messages {
+		promptChars += len(m.Content.String())
+	}
+	prompt := charsToTokens(promptChars)
+	completion := charsToTokens(completionChars)
+	return &openai.Usage{
+		PromptTokens:     prompt,
+		CompletionTokens: completion,
+		TotalTokens:      prompt + completion,
+	}
+}
+
+// charsToTokens converts a character count to an approximate token count
+// (~4 chars/token), rounding up so any non-empty text costs at least 1 token.
+func charsToTokens(chars int) int {
+	if chars <= 0 {
+		return 0
+	}
+	return (chars + 3) / 4
 }
 
 // recordSpend charges the authenticated key for a response's computed cost.

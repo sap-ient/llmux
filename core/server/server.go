@@ -32,22 +32,22 @@ import (
 
 // Server is the llmux gateway.
 type Server struct {
-	cfg            *config.Config
-	registry       *provider.Registry
-	router         *router.Router
+	cfg              *config.Config
+	registry         *provider.Registry
+	router           *router.Router
 	keys             keys.Store
 	identity         Identity
 	budget           BudgetGate
 	externalIdentity bool
-	cache          cache.Cache
-	catalog        *pricing.Catalog
-	pricingSources []pricing.Source
-	usage          UsageLogger
-	stats          *usageStats
-	metrics        *Metrics
-	log            *slog.Logger
-	semantic       bool
-	mux            *http.ServeMux
+	cache            cache.Cache
+	catalog          *pricing.Catalog
+	pricingSources   []pricing.Source
+	usage            UsageLogger
+	stats            *usageStats
+	metrics          *Metrics
+	log              *slog.Logger
+	semantic         bool
+	mux              *http.ServeMux
 }
 
 // New builds a Server from config.
@@ -330,14 +330,28 @@ func (s *Server) authMW(next http.Handler) http.Handler {
 			}
 			// Gate by the account's LLM budget via the BudgetGate seam. Static
 			// default = per-key budget; cp = central entitlements (fail-open on
-			// transport error, explicit deny enforced).
-			if d := s.budget.Check(r.Context(), p); d.Denied {
+			// transport error, explicit deny enforced). The gate may also place a
+			// per-account in-flight reservation (released after the request) and
+			// enforce a cp-side request-rate cap.
+			d := s.budget.Check(r.Context(), p)
+			if d.RateLimited {
+				releaseDecision(d)
+				writeError(w, http.StatusTooManyRequests,
+					openai.NewError(d.Reason, "rate_limit_error", "rate_limit_exceeded"))
+				return
+			}
+			if d.Denied {
+				releaseDecision(d)
 				writeError(w, http.StatusPaymentRequired,
 					openai.NewError(d.Reason, "insufficient_quota", "budget_exceeded"))
 				return
 			}
-			// Per-minute rate limiting stays a static-key concern (cp principals
-			// carry no local key/bucket and are simply not RPM-gated here).
+			// The reservation (if any) is held for the request's lifetime and
+			// freed once it completes, so concurrent requests can't all pass on a
+			// near-zero balance.
+			defer releaseDecision(d)
+			// Per-minute rate limiting for static keys (cp principals are
+			// rate-capped inside the gate above).
 			if p.Key != nil && !s.keys.Allow(token) {
 				writeError(w, http.StatusTooManyRequests,
 					openai.NewError("rate limit exceeded for key "+p.Key.Name, "rate_limit_error", "rate_limit_exceeded"))

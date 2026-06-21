@@ -59,6 +59,12 @@ type CPConfig struct {
 	URL string `json:"cp_url"`
 	// SharedSecret authenticates outbound cp calls via the X-Relay-Auth header.
 	SharedSecret string `json:"cp_shared_secret"`
+	// RPM is the per-account requests-per-minute cap applied to cp-resolved
+	// principals (which carry no local key bucket). 0 = no cp-side RPM limit.
+	RPM int `json:"cp_rpm"`
+	// EntitlementTTLSeconds bounds how long a fetched entitlement is cached and
+	// reused if cp becomes unreachable (last-known-good). 0 = a 30s default.
+	EntitlementTTLSeconds int `json:"cp_entitlement_ttl_seconds"`
 }
 
 // RetryConfig controls automatic retries and provider fallback.
@@ -372,6 +378,11 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("LLMUX_CP_SECRET"); v != "" {
 		c.CP.SharedSecret = v
+	}
+	if v := os.Getenv("LLMUX_CP_RPM"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.CP.RPM = n
+		}
 	}
 }
 

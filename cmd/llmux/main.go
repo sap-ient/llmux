@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/llmux/llmux/core/config"
 	"github.com/llmux/llmux/core/server"
@@ -102,7 +103,11 @@ func runServe(args []string) {
 	// URL is configured (config file `cp.cp_url` or env LLMUX_CP_URL). The core
 	// gateway never imports integration/cp; with cp unset the gateway stays
 	// fully standalone (static keys, no network calls to cp).
-	if cpCfg := cp.New(cfg.CP.URL, cfg.CP.SharedSecret); cpCfg.Enabled() {
+	cpCfg := cp.New(cfg.CP.URL, cfg.CP.SharedSecret).WithRPM(cfg.CP.RPM)
+	if cfg.CP.EntitlementTTLSeconds > 0 {
+		cpCfg = cpCfg.WithEntitlementTTL(time.Duration(cfg.CP.EntitlementTTLSeconds) * time.Second)
+	}
+	if cpCfg.Enabled() {
 		srv.SetIdentity(cp.NewIdentity(cpCfg))
 		srv.SetBudgetGate(cp.NewBudgetGate(cpCfg))
 		loggers = append(loggers, cp.NewUsageLogger(cpCfg))

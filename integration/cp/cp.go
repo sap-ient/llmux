@@ -20,9 +20,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/llmux/llmux/core/server"
@@ -41,6 +43,10 @@ type Config struct {
 	BaseURL string
 	// Secret is the shared secret sent as X-Relay-Auth on every cp call.
 	Secret string
+	// RPM is the per-account requests-per-minute cap for cp principals (0 = off).
+	RPM int
+	// EntitlementTTL bounds how long a fetched entitlement is cached/reused.
+	EntitlementTTL time.Duration
 }
 
 // Enabled reports whether the cp adapter should be wired (a base URL is set).
@@ -53,6 +59,12 @@ func New(baseURL, secret string) Config {
 		Secret:  strings.TrimSpace(secret),
 	}
 }
+
+// WithRPM returns a copy of the config with the per-account RPM cap set.
+func (c Config) WithRPM(rpm int) Config { c.RPM = rpm; return c }
+
+// WithEntitlementTTL returns a copy with the entitlement cache TTL set.
+func (c Config) WithEntitlementTTL(d time.Duration) Config { c.EntitlementTTL = d; return c }
 
 func (c Config) client() *http.Client { return &http.Client{Timeout: 5 * time.Second} }
 
@@ -119,14 +131,65 @@ func (i *Identity) Resolve(ctx context.Context, token string) (server.Principal,
 //             -> {llm_enabled,llm_budget_usd,suspended}
 // ---------------------------------------------------------------------------
 
+// defaultEntitlementTTL bounds how long a fetched entitlement is reused as
+// last-known-good when cp is unreachable.
+const defaultEntitlementTTL = 30 * time.Second
+
+// reservationHold is the per-request in-flight cost reserved against the budget
+// while a request is outstanding. We don't know a request's real cost until it
+// finishes, so we hold this nominal amount; it bounds concurrent over-commit to
+// at most (in-flight requests x reservationHold) USD above the cp budget.
+const reservationHold = 0.05
+
 // BudgetGate gates a request by the account's central LLM entitlements.
+//
+// Beyond the raw cp check it adds three safety layers that the audit flagged:
+//
+//   - RESERVATION: a per-account in-flight cost accumulator. Check adds a hold to
+//     the account total and denies when budget-inflight<=0, so N concurrent
+//     requests can't all pass on a near-zero balance. The hold is released when
+//     the request completes (server defers BudgetDecision.Release).
+//   - RPM: an in-process per-account request-rate cap for cp principals (which
+//     carry no local key bucket), so they aren't unlimited.
+//   - LAST-KNOWN-GOOD CACHE: a short-TTL entitlement cache. On a cp outage the
+//     gate enforces the last known budget/suspension instead of failing fully
+//     open. Cold cache + cp error -> allow but logged degraded.
 type BudgetGate struct {
 	cfg  Config
 	http *http.Client
+	ttl  time.Duration
+
+	mu       sync.Mutex
+	inflight map[string]float64       // account -> reserved in-flight USD
+	rpm      map[string]*rpmWindow    // account -> per-minute request window
+	cache    map[string]entCacheEntry // account -> last-known entitlement
+}
+
+type rpmWindow struct {
+	window int64 // unix-minute
+	count  int
+}
+
+type entCacheEntry struct {
+	ent entitlementResponse
+	at  time.Time
 }
 
 // NewBudgetGate builds the cp BudgetGate.
-func NewBudgetGate(cfg Config) *BudgetGate { return &BudgetGate{cfg: cfg, http: cfg.client()} }
+func NewBudgetGate(cfg Config) *BudgetGate {
+	ttl := defaultEntitlementTTL
+	if cfg.EntitlementTTL > 0 {
+		ttl = cfg.EntitlementTTL
+	}
+	return &BudgetGate{
+		cfg:      cfg,
+		http:     cfg.client(),
+		ttl:      ttl,
+		inflight: map[string]float64{},
+		rpm:      map[string]*rpmWindow{},
+		cache:    map[string]entCacheEntry{},
+	}
+}
 
 type entitlementResponse struct {
 	LLMEnabled   bool    `json:"llm_enabled"`
@@ -136,29 +199,22 @@ type entitlementResponse struct {
 
 // Check implements server.BudgetGate.
 //
-// FAIL-OPEN: any transport error or non-200 from cp returns "allowed" so a cp
-// outage never hard-downs the gateway. An EXPLICIT cp answer is enforced:
-// denied when !llm_enabled || suspended || remaining<=0.
+// FAIL-SOFT: a cp outage uses the last-known entitlement (within TTL) rather
+// than unlimited access; only a cold cache + cp error falls fully open (logged).
+// An EXPLICIT cp answer is enforced: denied when !llm_enabled || suspended ||
+// remaining<=0, where remaining accounts for in-flight reservations.
 func (b *BudgetGate) Check(ctx context.Context, p server.Principal) server.BudgetDecision {
-	reqURL := fmt.Sprintf("%s/api/entitlements?product=%s&account_id=%s",
-		b.cfg.BaseURL, product, url.QueryEscape(p.AccountID))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return server.BudgetDecision{} // fail open
+	// Per-account request-rate cap (cp principals have no local key bucket).
+	if b.cfg.RPM > 0 && !b.allowRPM(p.AccountID) {
+		return server.BudgetDecision{RateLimited: true, Reason: "rate limit exceeded for account " + p.AccountID}
 	}
-	b.cfg.auth(req)
 
-	resp, err := b.http.Do(req)
-	if err != nil {
-		return server.BudgetDecision{} // fail open on transport error
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return server.BudgetDecision{} // fail open on cp error
-	}
-	var ent entitlementResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ent); err != nil {
-		return server.BudgetDecision{} // fail open on malformed body
+	ent, ok := b.fetchEntitlement(ctx, p.AccountID)
+	if !ok {
+		// Cold cache and cp unreachable: fail open but flag it. We cannot place a
+		// reservation without a budget figure, so no hold is held here.
+		log.Printf("cp: entitlement unavailable for %s (cp outage, cold cache) — allowing degraded", p.AccountID)
+		return server.BudgetDecision{}
 	}
 
 	switch {
@@ -166,10 +222,107 @@ func (b *BudgetGate) Check(ctx context.Context, p server.Principal) server.Budge
 		return server.BudgetDecision{Denied: true, Reason: "account suspended"}
 	case !ent.LLMEnabled:
 		return server.BudgetDecision{Denied: true, Reason: "llm not enabled for account"}
-	case ent.LLMBudgetUSD <= 0:
+	}
+
+	// Reservation: deny if the budget net of in-flight holds is exhausted, else
+	// place a hold and return a Release to free it on completion.
+	b.mu.Lock()
+	remaining := ent.LLMBudgetUSD - b.inflight[p.AccountID]
+	if remaining <= 0 {
+		b.mu.Unlock()
 		return server.BudgetDecision{Denied: true, Reason: "llm budget exhausted"}
 	}
-	return server.BudgetDecision{}
+	b.inflight[p.AccountID] += reservationHold
+	b.mu.Unlock()
+
+	acct := p.AccountID
+	return server.BudgetDecision{Release: func() { b.release(acct) }}
+}
+
+// release frees one request's reservation hold for an account.
+func (b *BudgetGate) release(account string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	v := b.inflight[account] - reservationHold
+	if v <= 0 {
+		delete(b.inflight, account)
+		return
+	}
+	b.inflight[account] = v
+}
+
+// allowRPM enforces a per-account fixed-window request cap. Returns false when
+// the account has exceeded cfg.RPM in the current minute.
+func (b *BudgetGate) allowRPM(account string) bool {
+	now := time.Now().Unix() / 60
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	w := b.rpm[account]
+	if w == nil || w.window != now {
+		b.rpm[account] = &rpmWindow{window: now, count: 1}
+		return true
+	}
+	if w.count >= b.cfg.RPM {
+		return false
+	}
+	w.count++
+	return true
+}
+
+// fetchEntitlement gets the account entitlement from cp, caching it for TTL. On a
+// cp transport/non-200/decode error it returns the last cached entitlement if one
+// is present (any age — last-known-good beats unlimited during an outage). The
+// second return is false only when cp failed AND nothing is cached.
+func (b *BudgetGate) fetchEntitlement(ctx context.Context, account string) (entitlementResponse, bool) {
+	// Fresh cache hit: skip the network entirely.
+	b.mu.Lock()
+	if ce, ok := b.cache[account]; ok && time.Since(ce.at) < b.ttl {
+		b.mu.Unlock()
+		return ce.ent, true
+	}
+	b.mu.Unlock()
+
+	ent, err := b.queryCP(ctx, account)
+	if err != nil {
+		// cp unreachable/erroring: fall back to last-known entitlement if any.
+		b.mu.Lock()
+		ce, ok := b.cache[account]
+		b.mu.Unlock()
+		if ok {
+			log.Printf("cp: entitlement fetch failed for %s (%v) — using last-known-good", account, err)
+			return ce.ent, true
+		}
+		return entitlementResponse{}, false
+	}
+	b.mu.Lock()
+	b.cache[account] = entCacheEntry{ent: ent, at: time.Now()}
+	b.mu.Unlock()
+	return ent, true
+}
+
+// queryCP performs the raw entitlement GET against cp.
+func (b *BudgetGate) queryCP(ctx context.Context, account string) (entitlementResponse, error) {
+	reqURL := fmt.Sprintf("%s/api/entitlements?product=%s&account_id=%s",
+		b.cfg.BaseURL, product, url.QueryEscape(account))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return entitlementResponse{}, err
+	}
+	b.cfg.auth(req)
+
+	resp, err := b.http.Do(req)
+	if err != nil {
+		return entitlementResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return entitlementResponse{}, fmt.Errorf("cp status %d", resp.StatusCode)
+	}
+	var ent entitlementResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ent); err != nil {
+		return entitlementResponse{}, err
+	}
+	return ent, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -177,14 +330,37 @@ func (b *BudgetGate) Check(ctx context.Context, p server.Principal) server.Budge
 //   {"product":"llm","account_id":..,"kind":"llm_tokens","count":..,"cost_usd":..}
 // ---------------------------------------------------------------------------
 
-// UsageLogger reports finalized per-request cost to cp (fire-and-forget).
+// usageQueueDepth bounds the in-memory retry queue. When full, the oldest
+// pending record is dropped (logged) so a sustained cp outage can't grow memory
+// unbounded — a deliberate, observable backpressure bound.
+const usageQueueDepth = 1024
+
+// usageMaxAttempts is the total number of POST attempts per record (1 initial +
+// retries) before the record is dropped.
+const usageMaxAttempts = 5
+
+// UsageLogger reports finalized per-request cost to cp. It is non-blocking to the
+// response path and survives transient cp failures via a bounded in-memory retry
+// queue with exponential backoff. On a crash the in-memory queue is lost (the
+// JSONL logger remains the durable record); steady-state transient 5xx/timeouts
+// no longer silently drop billing.
 type UsageLogger struct {
 	cfg  Config
 	http *http.Client
+	ch   chan usageItem
 }
 
-// NewUsageLogger builds the cp UsageLogger.
-func NewUsageLogger(cfg Config) *UsageLogger { return &UsageLogger{cfg: cfg, http: cfg.client()} }
+type usageItem struct {
+	raw     []byte
+	attempt int
+}
+
+// NewUsageLogger builds the cp UsageLogger and starts its retry worker.
+func NewUsageLogger(cfg Config) *UsageLogger {
+	u := &UsageLogger{cfg: cfg, http: cfg.client(), ch: make(chan usageItem, usageQueueDepth)}
+	go u.worker()
+	return u
+}
 
 type usageBody struct {
 	Product   string  `json:"product"`
@@ -194,10 +370,10 @@ type usageBody struct {
 	CostUSD   float64 `json:"cost_usd"`
 }
 
-// Log implements server.UsageLogger. It POSTs the finalized cost to cp keyed by
-// the resolved account id. Fire-and-forget: it never blocks the request path and
-// silently drops on error. Records with no account id are skipped (nothing to
-// attribute to cp).
+// Log implements server.UsageLogger. It enqueues the finalized cost for delivery
+// to cp keyed by the resolved account id. Non-blocking: if the queue is full it
+// drops the record (logged) rather than stalling the response. Records with no
+// account id are skipped (nothing to attribute to cp).
 func (u *UsageLogger) Log(rec server.UsageRecord) {
 	if rec.AccountID == "" {
 		return
@@ -213,22 +389,71 @@ func (u *UsageLogger) Log(rec server.UsageRecord) {
 	if err != nil {
 		return
 	}
-	// Detach from the request lifetime; metering must outlive the response.
+	u.enqueue(usageItem{raw: raw, attempt: 0})
+}
+
+// enqueue pushes an item, dropping the oldest queued item if the buffer is full
+// so the producer (request path) never blocks.
+func (u *UsageLogger) enqueue(it usageItem) {
+	select {
+	case u.ch <- it:
+	default:
+		// Queue full: make room by discarding the oldest, then enqueue.
+		select {
+		case dropped := <-u.ch:
+			log.Printf("cp: usage queue full — dropping oldest record (depth=%d)", usageQueueDepth)
+			_ = dropped
+		default:
+		}
+		select {
+		case u.ch <- it:
+		default:
+			log.Printf("cp: usage queue full — dropping record")
+		}
+	}
+}
+
+// worker drains the queue, POSTing each record and re-enqueuing failures with
+// exponential backoff until usageMaxAttempts.
+func (u *UsageLogger) worker() {
+	for it := range u.ch {
+		if u.post(it.raw) {
+			continue
+		}
+		it.attempt++
+		if it.attempt >= usageMaxAttempts {
+			log.Printf("cp: usage POST gave up after %d attempts — dropping record", it.attempt)
+			continue
+		}
+		// Back off, then re-enqueue. Done in a goroutine so the worker keeps
+		// draining other records meanwhile.
+		go func(it usageItem) {
+			backoff := time.Duration(1<<uint(it.attempt-1)) * 100 * time.Millisecond
+			if backoff > 5*time.Second {
+				backoff = 5 * time.Second
+			}
+			time.Sleep(backoff)
+			u.enqueue(it)
+		}(it)
+	}
+}
+
+// post performs one usage POST; returns true on a 2xx (delivered).
+func (u *UsageLogger) post(raw []byte) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	go func() {
-		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.cfg.BaseURL+"/api/usage", bytes.NewReader(raw))
-		if err != nil {
-			return
-		}
-		req.Header.Set("Content-Type", "application/json")
-		u.cfg.auth(req)
-		resp, err := u.http.Do(req)
-		if err != nil {
-			return
-		}
-		resp.Body.Close()
-	}()
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.cfg.BaseURL+"/api/usage", bytes.NewReader(raw))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	u.cfg.auth(req)
+	resp, err := u.http.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
 // MultiUsageLogger fans a record out to several loggers, so the cp sink composes
