@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="392" height="104" viewBox="0 0 392 104" fill="none" role="img" aria-label="llmux — one OpenAI-compatible endpoint for every LLM provider">
+  <title>llmux</title>
+  <desc>The llmux app icon — a white multiplexer glyph on a rounded teal tile — beside the llmux wordmark (ll in slate, mux in teal).</desc>
+
+  <!-- ===== mark: rounded teal tile + white multiplexer glyph ===== -->
+  <!-- Tile fill is brand teal-400 (#2DD4BF); reads on both light and dark backgrounds. -->
+  <g transform="translate(8,12)">
+    <rect x="0" y="0" width="80" height="80" rx="19" fill="#2DD4BF"/>
+    <g transform="translate(8,8) scale(1.0)" stroke="#FFFFFF" stroke-width="3.25" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M33.75 22.5 L57.5 36.25 L57.5 56.25 L33.75 70 Z"/>
+      <line x1="20" y1="25" x2="33.75" y2="25"/>
+      <line x1="20" y1="40" x2="33.75" y2="40"/>
+      <line x1="20" y1="55" x2="33.75" y2="55"/>
+      <line x1="57.5" y1="46.25" x2="70" y2="46.25"/>
+    </g>
+    <g fill="#FFFFFF" transform="translate(8,8)">
+      <circle cx="16.25" cy="25" r="2.75"/>
+      <circle cx="16.25" cy="40" r="2.75"/>
+      <circle cx="16.25" cy="55" r="2.75"/>
+      <circle cx="70" cy="46.25" r="2.75"/>
+    </g>
+  </g>
+
+  <!-- ===== wordmark: ll (slate, reads on light + dark) + mux (teal accent) ===== -->
+  <text x="108" y="68"
+        font-family="ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace"
+        font-size="54" font-weight="600" letter-spacing="-1">
+    <tspan fill="#5B6B7F">ll</tspan><tspan fill="#14B8A6">mux</tspan>
+  </text>
+</svg>
