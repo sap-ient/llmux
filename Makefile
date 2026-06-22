@@ -38,15 +38,23 @@ run: build ## Build and run on :4000
 	$(BIN)
 
 clean:
-	rm -rf dist sdks/python/llmux/bin sdks/node/bin
+	rm -rf dist sdks/python/llmux/bin sdks/node/bin sdks/ruby/bin sdks/php/bin \
+		sdks/rust/bin sdks/java/bin sdks/dotnet/bin sdks/elixir/priv/bin
 
 # Build the binary into each language package's bin/ dir for local dev. Real
 # releases produce per-OS/arch binaries in CI and ship them in platform wheels /
 # npm optionalDependencies.
 sdk-bins: build
-	@mkdir -p sdks/python/llmux/bin sdks/node/bin
+	@mkdir -p sdks/python/llmux/bin sdks/node/bin sdks/ruby/bin sdks/php/bin \
+		sdks/rust/bin sdks/java/bin sdks/dotnet/bin sdks/elixir/priv/bin
 	cp $(BIN) sdks/python/llmux/bin/llmux
 	cp $(BIN) sdks/node/bin/llmux
+	cp $(BIN) sdks/ruby/bin/llmux
+	cp $(BIN) sdks/php/bin/llmux
+	cp $(BIN) sdks/rust/bin/llmux
+	cp $(BIN) sdks/java/bin/llmux
+	cp $(BIN) sdks/dotnet/bin/llmux
+	cp $(BIN) sdks/elixir/priv/bin/llmux
 
 docker: ## Build the Docker image
 	docker build -t llmux:latest .

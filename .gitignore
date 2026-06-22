@@ -3,6 +3,12 @@
 # Bundled binaries placed into language packages for local dev / CI release
 /sdks/python/llmux/bin/
 /sdks/node/bin/
+/sdks/ruby/bin/
+/sdks/php/bin/
+/sdks/rust/bin/
+/sdks/java/bin/
+/sdks/dotnet/bin/
+/sdks/elixir/priv/bin/
 
 # Local config & logs
 llmux.json
@@ -21,6 +27,21 @@ __pycache__/
 node_modules/
 # NOTE: web/dist is intentionally committed — it is embedded into the Go binary
 # via go:embed, so `go build` works without a Node toolchain. CI rebuilds it.
+
+# Rust
+/sdks/rust/target/
+/sdks/rust/Cargo.lock
+
+# .NET
+/sdks/dotnet/obj/
+# (sdks/dotnet/bin/ already ignored above)
+
+# Java
+/sdks/java/target/
+
+# Elixir
+/sdks/elixir/_build/
+/sdks/elixir/deps/
 
 # OS
 .DS_Store
