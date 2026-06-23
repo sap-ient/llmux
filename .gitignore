@@ -34,14 +34,26 @@ node_modules/
 
 # .NET
 /sdks/dotnet/obj/
+/sdks/dotnet/tests/obj/
+/sdks/dotnet/tests/bin/
 # (sdks/dotnet/bin/ already ignored above)
 
 # Java
 /sdks/java/target/
+/sdks/java/out/
+
+# PHP
+/sdks/php/vendor/
+/sdks/php/.phpunit.result.cache
+/sdks/php/.phpunit.cache/
+/sdks/php/composer.lock
 
 # Elixir
 /sdks/elixir/_build/
 /sdks/elixir/deps/
+
+# Python test caches
+.pytest_cache/
 
 # OS
 .DS_Store
