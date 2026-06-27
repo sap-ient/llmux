@@ -44,28 +44,34 @@ func (s *Server) backoff(attempt int) time.Duration {
 
 // dispatchUnary tries each target (primary then fallbacks), retrying retryable
 // errors on each, and returns the first success along with the provider name
-// that served it (for route-aware cost attribution).
-func (s *Server) dispatchUnary(ctx context.Context, req *openai.ChatCompletionRequest, raw []byte, res router.Resolution) (*openai.ChatCompletionResponse, string, error) {
+// that served it (for route-aware cost attribution) and whether that provider
+// was served via the account's own key (BYOK — for the metering decision).
+//
+// BYOK is resolved PER TARGET: each provider needs the right key (an account's
+// OpenAI key must not be sent to Anthropic), and on failover the metering
+// decision follows the provider that actually served the request.
+func (s *Server) dispatchUnary(ctx context.Context, req *openai.ChatCompletionRequest, raw []byte, res router.Resolution) (*openai.ChatCompletionResponse, string, bool, error) {
 	var lastErr error
 	for _, t := range res.All() {
+		callCtx, byok := s.resolveCredential(ctx, t.Provider.Name())
 		for attempt := 0; attempt <= s.cfg.Retry.MaxRetries; attempt++ {
 			if attempt > 0 {
 				select {
 				case <-ctx.Done():
-					return nil, "", ctx.Err()
+					return nil, "", false, ctx.Err()
 				case <-time.After(s.backoff(attempt - 1)):
 				}
 			}
-			resp, err := t.Provider.ChatCompletion(ctx, req, t.Model, raw)
+			resp, err := t.Provider.ChatCompletion(callCtx, req, t.Model, raw)
 			if err == nil {
-				return resp, t.Provider.Name(), nil
+				return resp, t.Provider.Name(), byok, nil
 			}
 			lastErr = err
 			if !shouldFailover(err) {
-				return nil, "", err // client error: don't retry or fall over
+				return nil, "", false, err // client error: don't retry or fall over
 			}
 		}
 		// Exhausted retries for this target; move to the next fallback.
 	}
-	return nil, "", lastErr
+	return nil, "", false, lastErr
 }

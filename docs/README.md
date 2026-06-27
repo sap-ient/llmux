@@ -14,6 +14,7 @@ Everything you need to run, configure, and operate llmux.
 | [Pricing & cost](../web/docs/pricing.md) | The live catalog, precedence, and per-request cost |
 | [Dashboard & ops](../web/docs/dashboard.md) | The embedded admin UI at `/ui` |
 | [Architecture](architecture.md) | How the gateway is laid out and why |
+| [LLM access: BYOK vs central](LLM-ACCESS.md) | Per-account own-key vs central metered keys, billing, the product consumption contract |
 | [Control-plane seam](control-plane.md) | Optional centralized billing & entitlements |
 | [Operations](operations.md) | Building, testing, and self-hosting |
 

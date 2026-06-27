@@ -66,7 +66,10 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, suffix st
 	// Rewrite the model field to the upstream target name.
 	body := rewriteModelField(raw, t.Model)
 
-	fr, err := fwd.Forward(r.Context(), provider.ForwardRequest{
+	// BYOK vs central for the routed provider: inject the account's own key when
+	// set, and mark the forward unmetered.
+	callCtx, byok := s.resolveCredential(r.Context(), t.Provider.Name())
+	fr, err := fwd.Forward(callCtx, provider.ForwardRequest{
 		Method: http.MethodPost, Suffix: suffix, Body: body, ContentType: "application/json",
 	})
 	if err != nil {
@@ -101,8 +104,9 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, suffix st
 		}
 	}
 	s.attachCost(model, t.Provider.Name(), usage)
-	s.recordSpend(r.Context(), usage)
-	s.logUsage(r.Context(), model, stream, false, usage)
+	meterCtx := withBYOK(r.Context(), byok)
+	s.recordSpend(meterCtx, usage)
+	s.logUsage(meterCtx, model, stream, false, usage)
 }
 
 // isStreamRequest best-effort reports whether the request body asked to stream.

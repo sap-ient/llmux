@@ -52,7 +52,8 @@ func (p *Provider) Name() string { return p.name }
 
 func (p *Provider) setHeaders(r *http.Request) {
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("Authorization", "Bearer "+p.apiKey)
+	// Use the per-request BYOK key when present, else the configured central key.
+	r.Header.Set("Authorization", "Bearer "+provider.ResolveKey(r.Context(), p.apiKey))
 	for k, v := range p.headers {
 		r.Header.Set(k, v)
 	}

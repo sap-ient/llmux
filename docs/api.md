@@ -48,6 +48,9 @@ allow-lists. See [Configuration](configuration.md).
 |---|---|---|
 | `GET /admin/keys` | master key | Virtual keys: budgets, spend, RPM. |
 | `GET /admin/usage` | master key | Usage by model. |
+| `GET /admin/byok/{account}` | master key | List provider names an account has BYOK keys for (never the keys). See [LLM access](LLM-ACCESS.md). |
+| `PUT /admin/byok/{account}/{provider}` | master key | Set (encrypt) an account's own provider key → that provider goes BYOK (unmetered). |
+| `DELETE /admin/byok/{account}/{provider}` | master key | Clear an account's BYOK key → revert to central (metered). |
 | `GET /metrics` | master key | Prometheus metrics. |
 | `GET /health` | none | Liveness probe. |
 | `GET /ui`, `GET /ui/docs` | none | Embedded admin dashboard + docs. |

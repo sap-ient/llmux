@@ -51,6 +51,36 @@ type Config struct {
 	// the composition root (cmd/llmux) to wire the OPTIONAL integration/cp
 	// adapter; the core gateway never imports it.
 	CP CPConfig `json:"cp"`
+
+	// BYOK configures per-account "bring your own key" storage. When a KEK is
+	// present, accounts can register their own provider keys (encrypted at rest)
+	// and requests for those providers use the account's key, unmetered. Empty =
+	// BYOK disabled: every request uses the central provider keys.
+	BYOK BYOKConfig `json:"byok"`
+}
+
+// BYOKConfig configures encrypted per-account BYOK key storage.
+type BYOKConfig struct {
+	// KEK is the 32-byte key-encryption key (raw, 64-char hex, or base64) used to
+	// seal BYOK keys at rest. Prefer setting it via the LLMUX_BYOK_KEK env var
+	// rather than in the config file. Empty = BYOK disabled.
+	KEK string `json:"kek"`
+	// KEKEnv names an env var to read the KEK from (alternative to KEK).
+	KEKEnv string `json:"kek_env"`
+	// StorePath persists the encrypted BYOK store to disk. Empty = in-memory only
+	// (keys are lost on restart).
+	StorePath string `json:"store_path"`
+}
+
+// ResolveKEK returns the effective KEK string, reading KEKEnv if KEK is empty.
+func (b BYOKConfig) ResolveKEK() string {
+	if b.KEK != "" {
+		return b.KEK
+	}
+	if b.KEKEnv != "" {
+		return os.Getenv(b.KEKEnv)
+	}
+	return ""
 }
 
 // CPConfig configures the optional control-plane integration.
@@ -359,6 +389,43 @@ func (c *Config) merge(o *Config) {
 	if len(o.DropParams) > 0 {
 		c.DropParams = o.DropParams
 	}
+	c.mergeCP(o)
+	c.mergeBYOK(o)
+}
+
+// mergeCP applies a file's control-plane block (later wins on set fields).
+func (c *Config) mergeCP(o *Config) {
+	if o.CP.URL != "" {
+		c.CP.URL = o.CP.URL
+	}
+	if o.CP.SharedSecret != "" {
+		c.CP.SharedSecret = o.CP.SharedSecret
+	}
+	if o.CP.RPM != 0 {
+		c.CP.RPM = o.CP.RPM
+	}
+	if o.CP.EntitlementTTLSeconds != 0 {
+		c.CP.EntitlementTTLSeconds = o.CP.EntitlementTTLSeconds
+	}
+	if o.CP.DegradedFailOpen {
+		c.CP.DegradedFailOpen = true
+	}
+	if o.CP.DegradedRPM != 0 {
+		c.CP.DegradedRPM = o.CP.DegradedRPM
+	}
+}
+
+// mergeBYOK applies a file's BYOK block (later wins on set fields).
+func (c *Config) mergeBYOK(o *Config) {
+	if o.BYOK.KEK != "" {
+		c.BYOK.KEK = o.BYOK.KEK
+	}
+	if o.BYOK.KEKEnv != "" {
+		c.BYOK.KEKEnv = o.BYOK.KEKEnv
+	}
+	if o.BYOK.StorePath != "" {
+		c.BYOK.StorePath = o.BYOK.StorePath
+	}
 }
 
 func (c *Config) applyEnv() {
@@ -403,6 +470,12 @@ func (c *Config) applyEnv() {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.CP.DegradedRPM = n
 		}
+	}
+	if v := os.Getenv("LLMUX_BYOK_KEK"); v != "" {
+		c.BYOK.KEK = v
+	}
+	if v := os.Getenv("LLMUX_BYOK_STORE"); v != "" {
+		c.BYOK.StorePath = v
 	}
 }
 

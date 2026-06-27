@@ -11,6 +11,7 @@ type ctxKey int
 const (
 	keyCtxKey ctxKey = iota
 	accountCtxKey
+	byokCtxKey
 )
 
 // withKey attaches an authenticated virtual key to the context.
@@ -28,6 +29,18 @@ func withAccount(ctx context.Context, id string) context.Context {
 func accountFrom(ctx context.Context) string {
 	id, _ := ctx.Value(accountCtxKey).(string)
 	return id
+}
+
+// withBYOK marks the request as served via the account's own provider key
+// (BYOK), so it is recorded as unmetered and not billed to the control plane.
+func withBYOK(ctx context.Context, byok bool) context.Context {
+	return context.WithValue(ctx, byokCtxKey, byok)
+}
+
+// byokFrom reports whether the request was served via BYOK (unmetered).
+func byokFrom(ctx context.Context) bool {
+	b, _ := ctx.Value(byokCtxKey).(bool)
+	return b
 }
 
 // keyFrom returns the authenticated key from context, or nil.

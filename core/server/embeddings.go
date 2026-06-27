@@ -33,7 +33,10 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := res.Primary
-	resp, err := t.Provider.Embeddings(r.Context(), &req, t.Model, raw)
+	// BYOK vs central for the routed provider: inject the account's own key when
+	// set, and mark the request unmetered.
+	callCtx, byok := s.resolveCredential(r.Context(), t.Provider.Name())
+	resp, err := t.Provider.Embeddings(callCtx, &req, t.Model, raw)
 	if err != nil {
 		writeProviderError(w, err)
 		return
@@ -51,7 +54,8 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		resp.Usage = &openai.Usage{}
 	}
 	s.attachCost(req.Model, t.Provider.Name(), resp.Usage)
-	s.recordSpend(r.Context(), resp.Usage)
-	s.logUsage(r.Context(), req.Model, false, false, resp.Usage)
+	meterCtx := withBYOK(r.Context(), byok)
+	s.recordSpend(meterCtx, resp.Usage)
+	s.logUsage(meterCtx, req.Model, false, false, resp.Usage)
 	writeJSON(w, http.StatusOK, resp)
 }

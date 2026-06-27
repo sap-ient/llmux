@@ -460,6 +460,12 @@ func (u *UsageLogger) Log(rec server.UsageRecord) {
 	if rec.AccountID == "" {
 		return
 	}
+	// BYOK requests are served with the account's OWN provider key — unmetered and
+	// never billed centrally. They are still recorded locally (JSONL/dashboard) by
+	// the core logger, but the cp billing sink skips them.
+	if rec.BYOK {
+		return
+	}
 	body := usageBody{
 		IdempotencyKey: rec.ID,
 		Product:        product,

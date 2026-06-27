@@ -298,6 +298,26 @@ func TestUsageIdempotencyKey(t *testing.T) {
 	}
 }
 
+// TestUsageSkipsBYOK verifies BYOK usage is never billed to cp: a record marked
+// BYOK is recorded locally by the core logger but the cp billing sink drops it.
+func TestUsageSkipsBYOK(t *testing.T) {
+	hit := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		hit <- struct{}{}
+	}))
+	defer srv.Close()
+
+	u := NewUsageLogger(New(srv.URL, ""))
+	u.Log(server.UsageRecord{AccountID: "acct_7", Total: 5, CostUSD: 0.1, BYOK: true})
+
+	select {
+	case <-hit:
+		t.Fatal("BYOK record must not POST to cp (unmetered)")
+	case <-time.After(300 * time.Millisecond):
+		// expected: nothing sent
+	}
+}
+
 func TestUsageSkipsNoAccount(t *testing.T) {
 	hit := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

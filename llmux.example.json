@@ -12,6 +12,9 @@
   "_comment_cp": "OPTIONAL Vulos control-plane integration. Leave cp_url empty for standalone (default: static keys, no cp). When set (or via env LLMUX_CP_URL / LLMUX_CP_SECRET) the gateway resolves identity, gates budget, and reports usage to cp via X-Relay-Auth. The core never imports the cp adapter; it is wired only by the binary.",
   "_comment_cp_degraded": "Degraded-mode posture when cp is unreachable AND no entitlement is cached (cold cache). DEFAULT bounds spend: requests are capped at cp_degraded_rpm per account per minute (0 = built-in conservative default of 20/min). Set cp_degraded_fail_open=true (or env LLMUX_CP_DEGRADED_FAIL_OPEN=1) to instead fail fully OPEN (unbounded) during a cp outage — only if you accept the spend risk.",
 
+  "byok": { "kek": "", "kek_env": "LLMUX_BYOK_KEK", "store_path": "byok.json" },
+  "_comment_byok": "OPTIONAL per-account 'bring your own key'. When a 32-byte KEK is present (prefer env LLMUX_BYOK_KEK; raw 32 bytes, 64-char hex, or base64) accounts can register their OWN provider keys, encrypted at rest with AES-256-GCM. A request for a provider the account has a BYOK key for is served with that key and is NOT metered or billed; everything else uses the central provider keys above and is metered. Manage keys via the master-key-gated PUT/DELETE/GET /admin/byok/{account}[/{provider}]. Leave kek empty to disable BYOK (every request uses central keys). See docs/LLM-ACCESS.md.",
+
   "providers": [
     { "name": "openai",     "type": "passthrough", "base_url": "https://api.openai.com/v1",            "api_key_env": "OPENAI_API_KEY" },
     { "name": "anthropic",  "type": "anthropic",   "base_url": "https://api.anthropic.com/v1",          "api_key_env": "ANTHROPIC_API_KEY" },

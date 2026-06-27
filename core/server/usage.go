@@ -25,6 +25,11 @@ type UsageRecord struct {
 	Total      int     `json:"total_tokens"`
 	CostUSD    float64 `json:"cost_usd"`
 	Cached     bool    `json:"cached,omitempty"`
+	// BYOK is true when the request was served with the account's OWN provider
+	// key. Such usage is UNMETERED: it is recorded locally (JSONL/dashboard) for
+	// the account's own visibility but is never billed to the control plane. The
+	// zero value (false) is the central path, so existing records bill as before.
+	BYOK bool `json:"byok,omitempty"`
 }
 
 // UsageLogger records per-request usage for billing/analytics.
@@ -72,6 +77,7 @@ func (s *Server) logUsage(ctx context.Context, model string, stream, cached bool
 		Time:    time.Now().UTC().Format(time.RFC3339),
 		KeyName: keyName(ctx), AccountID: accountFrom(ctx),
 		Model: model, Stream: stream, Cached: cached,
+		BYOK: byokFrom(ctx),
 	}
 	if usage != nil {
 		rec.Prompt = usage.PromptTokens

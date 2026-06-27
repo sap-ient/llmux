@@ -29,6 +29,7 @@ product / LiteLLM competitor" bar). `[x]` done · `[~]` partial · `[ ]` todo.
 - [x] Secret redaction: keys never logged; internal/transport detail not echoed to clients.
 - [x] Admin/metrics: master-key only, constant-time compare; `/health` disclosure gated.
 - [x] Per-key cache isolation; Bedrock path escaped; response size bounded.
+- [x] BYOK keys encrypted at rest (AES-256-GCM under `LLMUX_BYOK_KEK`); ciphertext-only on disk and in memory; never logged or returned by any endpoint (write-only via master-key `/admin/byok`). See [docs/LLM-ACCESS.md](docs/LLM-ACCESS.md).
 
 ## Scale & ops (H6 — done)
 - [x] Postgres-backed keys/spend/budgets (correct across replicas) — verified vs local PG18.

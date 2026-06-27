@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/llmux/llmux/core/byok"
 	"github.com/llmux/llmux/core/config"
 	"github.com/llmux/llmux/core/server"
 	"github.com/llmux/llmux/integration/cp"
@@ -84,6 +85,34 @@ func runServe(args []string) {
 	srv, err := server.New(cfg)
 	if err != nil {
 		log.Fatalf("llmux: init error: %v", err)
+	}
+
+	// OPTIONAL BYOK store. When a KEK is configured, accounts can register their
+	// OWN provider keys (encrypted at rest); requests for those providers then use
+	// the account's key and are NOT metered/billed. With no KEK, BYOK is off and
+	// every request uses the central provider keys (the standalone default).
+	if kekStr := cfg.BYOK.ResolveKEK(); kekStr != "" {
+		kek, err := byok.ParseKEK(kekStr)
+		if err != nil {
+			log.Fatalf("llmux: byok KEK: %v", err)
+		}
+		crypter, err := byok.NewCrypter(kek)
+		if err != nil {
+			log.Fatalf("llmux: byok crypter: %v", err)
+		}
+		var store server.BYOKStore
+		if cfg.BYOK.StorePath != "" {
+			fs, err := byok.NewFileStore(crypter, cfg.BYOK.StorePath)
+			if err != nil {
+				log.Fatalf("llmux: byok store: %v", err)
+			}
+			store = fs
+			log.Printf("llmux: BYOK enabled (encrypted store -> %s)", cfg.BYOK.StorePath)
+		} else {
+			store = byok.NewMemStore(crypter)
+			log.Printf("llmux: BYOK enabled (in-memory store)")
+		}
+		srv.SetBYOKStore(store)
 	}
 
 	// Build the usage logger(s). JSONL logging (if configured) is preserved and

@@ -38,6 +38,7 @@ type Server struct {
 	keys             keys.Store
 	identity         Identity
 	budget           BudgetGate
+	byok             BYOKStore
 	externalIdentity bool
 	cache            cache.Cache
 	catalog          *pricing.Catalog
@@ -206,6 +207,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /admin/keys", s.handleAdminKeys)
 	s.mux.HandleFunc("GET /admin/usage", s.handleAdminUsage)
 	s.registerModalityRoutes()
+	s.registerBYOKRoutes()
 	s.mountUI()
 }
 

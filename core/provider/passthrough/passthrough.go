@@ -41,8 +41,9 @@ func (p *Provider) Name() string { return p.name }
 
 func (p *Provider) setHeaders(r *http.Request) {
 	r.Header.Set("Content-Type", "application/json")
-	if p.apiKey != "" {
-		r.Header.Set("Authorization", "Bearer "+p.apiKey)
+	// Use the per-request BYOK key when present, else the configured central key.
+	if key := provider.ResolveKey(r.Context(), p.apiKey); key != "" {
+		r.Header.Set("Authorization", "Bearer "+key)
 	}
 	for k, v := range p.headers {
 		r.Header.Set(k, v)
@@ -139,8 +140,8 @@ func (p *Provider) Forward(ctx context.Context, fr provider.ForwardRequest) (*pr
 		ct = "application/json"
 	}
 	req.Header.Set("Content-Type", ct)
-	if p.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	if key := provider.ResolveKey(ctx, p.apiKey); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	for k, v := range p.headers {
 		req.Header.Set(k, v)

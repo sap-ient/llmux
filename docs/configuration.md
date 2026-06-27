@@ -26,6 +26,8 @@ keys, and the pricing catalog.
 | `LLMUX_REDIS` | Redis address (rate limits + shared cache) |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, … | Provider credentials, referenced by `api_key_env` in config |
 | `LLMUX_CP_URL`, `LLMUX_CP_SECRET` | Optional control-plane URL + shared secret (see [Control-plane seam](control-plane.md)) |
+| `LLMUX_BYOK_KEK` | 32-byte key-encryption key (raw / 64-hex / base64) enabling per-account BYOK keys, encrypted at rest. Empty = BYOK off (see [LLM access](LLM-ACCESS.md)) |
+| `LLMUX_BYOK_STORE` | Path to persist the encrypted BYOK store (omit for in-memory only) |
 | `LLMUX_LOG_LEVEL` | Log verbosity |
 
 ## Postgres & Redis are optional

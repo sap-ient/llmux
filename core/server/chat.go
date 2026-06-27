@@ -62,7 +62,11 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, req *openai.C
 		if hit, ok := s.cache.Get(cacheKey); ok {
 			w.Header().Set("X-LLMux-Cache", "hit")
 			s.metrics.incCacheHit()
-			s.logUsage(r.Context(), req.Model, false, true, hit.Usage)
+			// No provider is called on a cache hit; attribute the metering decision
+			// to the route's primary provider's BYOK status so a BYOK account's
+			// cache hit is recorded unmetered (and never billed to the control plane).
+			hitCtx := withBYOK(r.Context(), s.primaryBYOK(r.Context(), res.Primary.Provider.Name()))
+			s.logUsage(hitCtx, req.Model, false, true, hit.Usage)
 			writeRawJSON(w, hit.Body) // pre-serialized body; no re-marshal
 			return
 		}
@@ -77,7 +81,7 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, req *openai.C
 	}
 	ctx, sink := provider.WithHeaderSink(ctx)
 
-	resp, usedProvider, err := s.dispatchUnary(ctx, req, raw, res)
+	resp, usedProvider, byok, err := s.dispatchUnary(ctx, req, raw, res)
 	if err != nil {
 		s.metrics.incUpstreamErr()
 		relayHeaders(w, sink) // relay rate-limit/retry-after headers even on error
@@ -86,8 +90,10 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, req *openai.C
 	}
 	fillResponseDefaults(resp, req.Model)
 	s.attachCost(req.Model, usedProvider, resp.Usage)
-	s.recordSpend(r.Context(), resp.Usage)
-	s.logUsage(r.Context(), req.Model, false, false, resp.Usage)
+	// Meter against the provider that actually served: BYOK is unmetered.
+	meterCtx := withBYOK(r.Context(), byok)
+	s.recordSpend(meterCtx, resp.Usage)
+	s.logUsage(meterCtx, req.Model, false, false, resp.Usage)
 
 	// Serialize once: write it and (if caching) store the bytes — a hit then
 	// replays the body verbatim with no re-marshal and no shared response pointer.
@@ -131,9 +137,10 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req *openai.
 	started := false
 	var lastUsage *openai.Usage
 	var usedProvider string
+	var usedBYOK bool    // whether the serving provider used the account's own key
 	var contentChars int // accumulated streamed text, for the fallback estimate
 
-	makeYield := func(provName string) func(*openai.ChatCompletionChunk) error {
+	makeYield := func(provName string, byok bool) func(*openai.ChatCompletionChunk) error {
 		return func(chunk *openai.ChatCompletionChunk) error {
 			if !started {
 				var ok bool
@@ -143,6 +150,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req *openai.
 				}
 				started = true
 				usedProvider = provName
+				usedBYOK = byok
 			}
 			if chunk.Model == "" {
 				chunk.Model = req.Model
@@ -164,7 +172,10 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req *openai.
 	// Try targets until one begins streaming; failover only before first chunk.
 	var lastErr error
 	for _, t := range res.All() {
-		lastErr = t.Provider.ChatCompletionStream(r.Context(), req, t.Model, raw, makeYield(t.Provider.Name()))
+		// Resolve BYOK vs central per target so the right key is used and the
+		// metering decision follows the provider that actually serves.
+		callCtx, byok := s.resolveCredential(r.Context(), t.Provider.Name())
+		lastErr = t.Provider.ChatCompletionStream(callCtx, req, t.Model, raw, makeYield(t.Provider.Name(), byok))
 		if lastErr == nil || started {
 			break
 		}
@@ -187,8 +198,9 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req *openai.
 			metered = estimateStreamUsage(req, contentChars)
 			s.attachCost(req.Model, usedProvider, metered)
 		}
-		s.recordSpend(r.Context(), metered)
-		s.logUsage(r.Context(), req.Model, true, false, metered)
+		meterCtx := withBYOK(r.Context(), usedBYOK)
+		s.recordSpend(meterCtx, metered)
+		s.logUsage(meterCtx, req.Model, true, false, metered)
 
 		body := openai.NewError(lastErr.Error(), "upstream_error", "")
 		if pe := asProviderError(lastErr); pe != nil && pe.Body != nil {
@@ -207,8 +219,9 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req *openai.
 			lastUsage = estimateStreamUsage(req, contentChars)
 			s.attachCost(req.Model, usedProvider, lastUsage)
 		}
-		s.recordSpend(r.Context(), lastUsage)
-		s.logUsage(r.Context(), req.Model, true, false, lastUsage)
+		meterCtx := withBYOK(r.Context(), usedBYOK)
+		s.recordSpend(meterCtx, lastUsage)
+		s.logUsage(meterCtx, req.Model, true, false, lastUsage)
 		sse.done()
 		return
 	}
@@ -247,8 +260,10 @@ func charsToTokens(chars int) int {
 }
 
 // recordSpend charges the authenticated key for a response's computed cost.
+// BYOK requests are unmetered: they consume the account's own provider key, so
+// no central spend is recorded against the static key budget.
 func (s *Server) recordSpend(ctx context.Context, usage *openai.Usage) {
-	if usage == nil || usage.Cost == nil {
+	if usage == nil || usage.Cost == nil || byokFrom(ctx) {
 		return
 	}
 	if k := keyFrom(ctx); k != nil {

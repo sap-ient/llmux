@@ -60,7 +60,8 @@ func (p *Provider) post(ctx context.Context, client *http.Client, endpoint strin
 		return nil, provider.NewTransportError(p.name, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-goog-api-key", p.apiKey)
+	// Use the per-request BYOK key when present, else the configured central key.
+	req.Header.Set("x-goog-api-key", provider.ResolveKey(ctx, p.apiKey))
 	for k, v := range p.headers {
 		req.Header.Set(k, v)
 	}
