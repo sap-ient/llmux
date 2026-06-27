@@ -92,14 +92,41 @@ func (c Config) auth(req *http.Request) {
 // Identity: POST {cp}/api/llm/resolve {"key":"<token>"} -> {account_id,tier}
 // ---------------------------------------------------------------------------
 
+// defaultIdentityTTL bounds how long a successfully-resolved principal is reused
+// as last-known-good when cp is unreachable. Kept short so a revoked token stops
+// being admitted quickly once cp recovers.
+const defaultIdentityTTL = 30 * time.Second
+
 // Identity resolves a bearer token to a Vulos account via cp.
+//
+// It mirrors the BudgetGate's last-known-good behavior so a brief cp outage
+// degrades gracefully instead of hard-401ing every request: a token that was
+// SUCCESSFULLY resolved within the TTL is reused when cp is unreachable. It is
+// fail-closed in every other respect — a token cp has never confirmed, or one cp
+// explicitly rejects (4xx), is never admitted from cache, and a definitive
+// rejection evicts any cached entry so a revoked token can't ride the TTL.
 type Identity struct {
 	cfg  Config
 	http *http.Client
+	ttl  time.Duration
+
+	mu    sync.Mutex
+	cache map[string]idCacheEntry // token -> last successfully-resolved principal
+}
+
+type idCacheEntry struct {
+	p  server.Principal
+	at time.Time
 }
 
 // NewIdentity builds the cp Identity resolver.
-func NewIdentity(cfg Config) *Identity { return &Identity{cfg: cfg, http: cfg.client()} }
+func NewIdentity(cfg Config) *Identity {
+	ttl := defaultIdentityTTL
+	if cfg.EntitlementTTL > 0 {
+		ttl = cfg.EntitlementTTL
+	}
+	return &Identity{cfg: cfg, http: cfg.client(), ttl: ttl, cache: map[string]idCacheEntry{}}
+}
 
 type resolveRequest struct {
 	Key string `json:"key"`
@@ -110,9 +137,17 @@ type resolveResponse struct {
 	Tier      string `json:"tier"`
 }
 
-// Resolve implements server.Identity. A 404 from cp means the token is unknown
-// (ok=false → 401). Other transport/non-200 errors also resolve to unknown:
-// an unauthenticated request should not be admitted just because cp blipped.
+// Resolve implements server.Identity.
+//
+// Outcomes:
+//   - cp 200 + account: resolved, cached as last-known-good, ok=true.
+//   - cp explicit 4xx (e.g. 404 unknown token): ok=false AND any cached entry for
+//     the token is evicted — a definitive rejection must not be overridden by the
+//     last-known-good cache (revoked tokens stop working immediately).
+//   - cp unreachable (transport error) or 5xx: DEGRADED. If the same token was
+//     successfully resolved within the TTL, reuse that principal so a brief cp
+//     blip doesn't 401 every in-flight session. Otherwise ok=false (a token cp
+//     never confirmed is never admitted just because cp is down).
 func (i *Identity) Resolve(ctx context.Context, token string) (server.Principal, bool) {
 	raw, err := json.Marshal(resolveRequest{Key: token})
 	if err != nil {
@@ -127,17 +162,50 @@ func (i *Identity) Resolve(ctx context.Context, token string) (server.Principal,
 
 	resp, err := i.http.Do(req)
 	if err != nil {
-		return server.Principal{}, false
+		// cp unreachable: degrade to last-known-good (fail-soft) if we have a
+		// fresh, previously-confirmed principal for this token.
+		return i.lastKnownGood(token)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return server.Principal{}, false
+
+	if resp.StatusCode == http.StatusOK {
+		var r resolveResponse
+		if err := json.NewDecoder(resp.Body).Decode(&r); err != nil || r.AccountID == "" {
+			return server.Principal{}, false
+		}
+		p := server.Principal{Token: token, AccountID: r.AccountID, Tier: r.Tier}
+		i.mu.Lock()
+		i.cache[token] = idCacheEntry{p: p, at: time.Now()}
+		i.mu.Unlock()
+		return p, true
 	}
-	var r resolveResponse
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil || r.AccountID == "" {
-		return server.Principal{}, false
+
+	// 5xx (or any other server-side failure): cp is degraded, not authoritative
+	// — fall back to last-known-good rather than locking everyone out.
+	if resp.StatusCode >= 500 {
+		return i.lastKnownGood(token)
 	}
-	return server.Principal{Token: token, AccountID: r.AccountID, Tier: r.Tier}, true
+
+	// Explicit client-side rejection (4xx, e.g. 404 unknown / revoked token):
+	// definitive. Evict any cached entry so the token cannot ride the TTL.
+	i.mu.Lock()
+	delete(i.cache, token)
+	i.mu.Unlock()
+	return server.Principal{}, false
+}
+
+// lastKnownGood returns a previously-confirmed principal for token when one was
+// resolved within the TTL, used only when cp is unreachable/degraded. It never
+// admits a token that was never successfully resolved.
+func (i *Identity) lastKnownGood(token string) (server.Principal, bool) {
+	i.mu.Lock()
+	ce, ok := i.cache[token]
+	i.mu.Unlock()
+	if ok && time.Since(ce.at) < i.ttl {
+		log.Printf("cp: identity resolve unavailable — using last-known-good principal for account %s", ce.p.AccountID)
+		return ce.p, true
+	}
+	return server.Principal{}, false
 }
 
 // ---------------------------------------------------------------------------

@@ -54,11 +54,7 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, req *openai.C
 	// Exact-match cache lookup (only when enabled).
 	var cacheKey string
 	if s.cache != nil {
-		scope := ""
-		if k := keyFrom(r.Context()); k != nil {
-			scope = k.Key
-		}
-		cacheKey = s.cacheKeyFor(req, raw, scope)
+		cacheKey = s.cacheKeyFor(req, raw, cacheScope(r.Context()))
 		if hit, ok := s.cache.Get(cacheKey); ok {
 			w.Header().Set("X-LLMux-Cache", "hit")
 			s.metrics.incCacheHit()

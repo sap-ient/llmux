@@ -3,9 +3,26 @@ package cache
 import (
 	"context"
 	"math"
+	"strings"
 	"sync"
 	"time"
 )
+
+// scopeDelimiter separates the tenant scope from the embeddable text in a
+// semantic cache key. The scope (everything before the FIRST delimiter) is a
+// HARD partition that is NOT embedded — embedding it would barely shift the
+// vector, so a near-identical prompt from another tenant would still clear the
+// similarity threshold and leak. Callers build keys as `scope + "\x00" + text`.
+const scopeDelimiter = "\x00"
+
+// splitScope splits a semantic cache key into its tenant scope and the text to
+// embed. A key with no delimiter has an empty scope (the whole key is text).
+func splitScope(key string) (scope, text string) {
+	if i := strings.IndexByte(key, scopeDelimiter[0]); i >= 0 {
+		return key[:i], key[i+1:]
+	}
+	return "", key
+}
 
 // Embedder turns text into a fixed-length embedding vector. Implementations are
 // expected to be deterministic for a given input so that semantically identical
@@ -17,6 +34,7 @@ type Embedder interface {
 // semanticEntry holds a stored response keyed by its embedding rather than an
 // exact text/hash key. expires is zero when the entry never expires.
 type semanticEntry struct {
+	scope   string // tenant partition; only entries with a matching scope can match
 	vec     []float64
 	entry   *Entry
 	expires time.Time
@@ -60,7 +78,8 @@ func NewSemanticCache(embedder Embedder, threshold float64, maxEntries int, ttl 
 // Expired entries encountered during the scan are pruned. On embedder error it
 // returns (nil, false).
 func (c *SemanticCache) Get(key string) (*Entry, bool) {
-	vec, err := c.embedder.Embed(context.Background(), key)
+	scope, text := splitScope(key)
+	vec, err := c.embedder.Embed(context.Background(), text)
 	if err != nil {
 		return nil, false
 	}
@@ -79,6 +98,11 @@ func (c *SemanticCache) Get(key string) (*Entry, bool) {
 		}
 		idx := len(kept)
 		kept = append(kept, en)
+		// HARD tenant partition: only entries stored under the SAME scope can
+		// match, so a similar prompt from another account never leaks.
+		if en.scope != scope {
+			continue
+		}
 		if sim := cosine(vec, en.vec); sim >= bestSim {
 			bestSim = sim
 			bestIdx = idx
@@ -99,7 +123,8 @@ func (c *SemanticCache) Get(key string) (*Entry, bool) {
 // Set embeds the key text and stores the response. Oldest entries are evicted
 // (FIFO) once capacity is exceeded. On embedder error it is a no-op.
 func (c *SemanticCache) Set(key string, e *Entry) {
-	vec, err := c.embedder.Embed(context.Background(), key)
+	scope, text := splitScope(key)
+	vec, err := c.embedder.Embed(context.Background(), text)
 	if err != nil {
 		return
 	}
@@ -108,6 +133,7 @@ func (c *SemanticCache) Set(key string, e *Entry) {
 	defer c.mu.Unlock()
 
 	c.entries = append(c.entries, semanticEntry{
+		scope:   scope,
 		vec:     vec,
 		entry:   e,
 		expires: c.expiry(),

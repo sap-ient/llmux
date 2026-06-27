@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,6 +73,85 @@ func TestIdentityResolveTransportError(t *testing.T) {
 	id := NewIdentity(New(url, ""))
 	if _, ok := id.Resolve(context.Background(), "sk-x"); ok {
 		t.Fatal("transport error must not admit the request")
+	}
+}
+
+// TestIdentityLastKnownGoodOnOutage proves a brief cp outage degrades gracefully:
+// a token that was SUCCESSFULLY resolved is reused (within TTL) when cp returns
+// 5xx or is unreachable, while a token cp never confirmed is still refused.
+func TestIdentityLastKnownGoodOnOutage(t *testing.T) {
+	var down atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(resolveResponse{AccountID: "acct_7", Tier: "pro"})
+	}))
+	defer srv.Close()
+
+	id := NewIdentity(New(srv.URL, ""))
+	// Warm: a successful resolve caches the principal as last-known-good.
+	if p, ok := id.Resolve(context.Background(), "sk-good"); !ok || p.AccountID != "acct_7" {
+		t.Fatalf("warm resolve failed: %+v ok=%v", p, ok)
+	}
+	// cp now 5xx: the previously-confirmed token still resolves (fail-soft).
+	down.Store(true)
+	if p, ok := id.Resolve(context.Background(), "sk-good"); !ok || p.AccountID != "acct_7" {
+		t.Fatalf("5xx outage should reuse last-known-good: %+v ok=%v", p, ok)
+	}
+	// A token never confirmed is NOT admitted during the outage (fail-closed).
+	if _, ok := id.Resolve(context.Background(), "sk-never"); ok {
+		t.Fatal("unconfirmed token must not be admitted during a cp outage")
+	}
+}
+
+// TestIdentityRevokedEvictsCache proves a definitive cp rejection (4xx) is never
+// overridden by the last-known-good cache: a revoked token stops working
+// immediately and does not survive a subsequent cp outage.
+func TestIdentityRevokedEvictsCache(t *testing.T) {
+	var revoked atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if revoked.Load() {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		json.NewEncoder(w).Encode(resolveResponse{AccountID: "acct_7", Tier: "pro"})
+	}))
+	defer srv.Close()
+
+	id := NewIdentity(New(srv.URL, ""))
+	if _, ok := id.Resolve(context.Background(), "sk-tok"); !ok {
+		t.Fatal("initial resolve should succeed")
+	}
+	// cp now revokes the token (404): definitive — must reject AND evict.
+	revoked.Store(true)
+	if _, ok := id.Resolve(context.Background(), "sk-tok"); ok {
+		t.Fatal("revoked token (404) must be rejected, not served from cache")
+	}
+	// Even if cp then goes fully down, the evicted token is not resurrected.
+	srv.Close()
+	if _, ok := id.Resolve(context.Background(), "sk-tok"); ok {
+		t.Fatal("evicted (revoked) token must not survive a later outage")
+	}
+}
+
+// TestIdentityLastKnownGoodTTLBounded proves the last-known-good window is
+// bounded: once the TTL lapses, an outage no longer admits the cached principal.
+func TestIdentityLastKnownGoodTTLBounded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(resolveResponse{AccountID: "acct_7", Tier: "pro"})
+	}))
+
+	id := NewIdentity(New(srv.URL, "").WithEntitlementTTL(20 * time.Millisecond))
+	if _, ok := id.Resolve(context.Background(), "sk-tok"); !ok {
+		t.Fatal("initial resolve should succeed")
+	}
+	// cp unreachable AND the cached principal has aged past the TTL.
+	srv.Close()
+	time.Sleep(40 * time.Millisecond)
+	if _, ok := id.Resolve(context.Background(), "sk-tok"); ok {
+		t.Fatal("expired last-known-good must not be admitted")
 	}
 }
 

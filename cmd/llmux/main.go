@@ -113,6 +113,12 @@ func runServe(args []string) {
 			log.Printf("llmux: BYOK enabled (in-memory store)")
 		}
 		srv.SetBYOKStore(store)
+
+		// GUARDRAIL: warn loudly when the /admin/byok/* endpoints are exposed
+		// without authentication (BYOK on, no master key, TCP bind).
+		if msg := byokGuardrailWarning(cfg); msg != "" {
+			log.Print(msg)
+		}
 	}
 
 	// Build the usage logger(s). JSONL logging (if configured) is preserved and
@@ -161,6 +167,26 @@ func runServe(args []string) {
 	if err := srv.Run(ctx); err != nil {
 		log.Fatalf("llmux: %v", err)
 	}
+}
+
+// byokGuardrailWarning returns a startup warning when the /admin/byok/*
+// endpoints — which register/clear an account's own provider keys — are reachable
+// WITHOUT authentication. They are master-key gated, so the dangerous case is:
+// BYOK enabled, no master key, and a TCP listener (anyone who can connect can
+// write/list BYOK credentials). A unix socket is filesystem-permission gated
+// (0600, owner-only), so a socket-only bind is not warned about. Returns "" when
+// the configuration is safe.
+func byokGuardrailWarning(cfg *config.Config) string {
+	if cfg.BYOK.ResolveKEK() == "" {
+		return "" // BYOK disabled
+	}
+	if cfg.Server.MasterKey != "" {
+		return "" // admin endpoints are authenticated
+	}
+	if cfg.Server.Addr == "" {
+		return "" // no TCP bind (unix socket is owner-only)
+	}
+	return fmt.Sprintf("llmux: WARNING: BYOK is enabled but no master key is set and the gateway is bound to a TCP socket (%s) — the /admin/byok/* endpoints are UNAUTHENTICATED and reachable by anyone who can connect. Set server.master_key (or LLMUX_MASTER_KEY) to protect them.", cfg.Server.Addr)
 }
 
 func runModels(args []string) {

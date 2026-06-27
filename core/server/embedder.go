@@ -37,11 +37,29 @@ func (e serverEmbedder) Embed(ctx context.Context, text string) ([]float64, erro
 	return resp.Data[0].Embedding, nil
 }
 
-// cacheKeyFor returns the cache lookup key for a request, scoped by the calling
-// key so virtual keys never share cached responses (cross-tenant isolation).
-// scope is the authenticated key (empty when unauthenticated). For semantic
-// caching it returns canonical prompt text (which gets embedded); for exact
-// caching, a body hash.
+// cacheScope returns the per-tenant cache scope for a request so cached
+// responses are NEVER shared across accounts (cross-tenant isolation), whether
+// the request was authenticated by a static key or resolved by the control
+// plane.
+//
+//   - Static key: the key's secret (unique per virtual key).
+//   - CP-resolved principal (no static Key): the resolved account id. Without
+//     this, every cp principal would scope to "" and could be served another
+//     account's cached — and, with semantic caching, merely SIMILAR — content.
+//   - Genuinely unauthenticated (open/local mode): "" (a single shared scope).
+func cacheScope(ctx context.Context) string {
+	if k := keyFrom(ctx); k != nil {
+		return k.Key
+	}
+	return accountFrom(ctx)
+}
+
+// cacheKeyFor returns the cache lookup key for a request, scoped by the caller's
+// tenant (see cacheScope) so neither virtual keys nor cp-resolved accounts ever
+// share cached responses (cross-tenant isolation). For semantic caching it
+// returns canonical prompt text (which gets embedded); for exact caching, a body
+// hash. The scope is prefixed in both modes so the isolation holds for the
+// semantic cache too.
 func (s *Server) cacheKeyFor(req *openai.ChatCompletionRequest, raw []byte, scope string) string {
 	if s.semantic {
 		return scope + "\x00" + canonicalText(req)
