@@ -24,6 +24,7 @@ func clearLLMUXEnv(t *testing.T) {
 	for _, k := range []string{
 		"LLMUX_ADDR", "LLMUX_SOCKET", "LLMUX_MASTER_KEY", "LLMUX_LOG_LEVEL",
 		"LLMUX_POSTGRES", "LLMUX_REDIS", "LLMUX_SYNC_INTERVAL_MIN",
+		"DATABASE_URL", "VULOS_DATABASE_URL", "LLMUX_POSTGRES_SCHEMA",
 	} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
@@ -309,6 +310,105 @@ func TestLoad_EnvOverridesFile(t *testing.T) {
 	if c.Pricing.SyncIntervalMinutes != 12 {
 		t.Errorf("SyncIntervalMinutes = %d, want 12", c.Pricing.SyncIntervalMinutes)
 	}
+}
+
+// TestPostgresDSNResolution covers the shared-Neon DSN precedence:
+// VULOS_DATABASE_URL > DATABASE_URL > LLMUX_POSTGRES > config file, and the
+// schema defaulting to "llmux" whenever Postgres is in play.
+func TestPostgresDSNResolution(t *testing.T) {
+	t.Run("unset leaves Postgres empty (in-memory default)", func(t *testing.T) {
+		clearKnownProviderEnv(t)
+		clearLLMUXEnv(t)
+		c, err := Load("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Postgres != "" {
+			t.Errorf("Postgres = %q, want empty when no DSN env set", c.Postgres)
+		}
+		if c.PostgresSchema != "" {
+			t.Errorf("PostgresSchema = %q, want empty when Postgres unset", c.PostgresSchema)
+		}
+	})
+
+	t.Run("LLMUX_POSTGRES alone still works (fallback) and defaults schema", func(t *testing.T) {
+		clearKnownProviderEnv(t)
+		clearLLMUXEnv(t)
+		t.Setenv("LLMUX_POSTGRES", "postgres://legacy")
+		c, err := Load("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Postgres != "postgres://legacy" {
+			t.Errorf("Postgres = %q, want legacy fallback value", c.Postgres)
+		}
+		if c.PostgresSchema != "llmux" {
+			t.Errorf("PostgresSchema = %q, want default llmux", c.PostgresSchema)
+		}
+	})
+
+	t.Run("DATABASE_URL preferred over LLMUX_POSTGRES", func(t *testing.T) {
+		clearKnownProviderEnv(t)
+		clearLLMUXEnv(t)
+		t.Setenv("LLMUX_POSTGRES", "postgres://legacy")
+		t.Setenv("DATABASE_URL", "postgres://shared")
+		c, err := Load("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Postgres != "postgres://shared" {
+			t.Errorf("Postgres = %q, want shared DATABASE_URL", c.Postgres)
+		}
+	})
+
+	t.Run("VULOS_DATABASE_URL wins over DATABASE_URL and LLMUX_POSTGRES", func(t *testing.T) {
+		clearKnownProviderEnv(t)
+		clearLLMUXEnv(t)
+		t.Setenv("LLMUX_POSTGRES", "postgres://legacy")
+		t.Setenv("DATABASE_URL", "postgres://shared")
+		t.Setenv("VULOS_DATABASE_URL", "postgres://vulos")
+		c, err := Load("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Postgres != "postgres://vulos" {
+			t.Errorf("Postgres = %q, want VULOS_DATABASE_URL", c.Postgres)
+		}
+	})
+
+	t.Run("schema env overrides the default", func(t *testing.T) {
+		clearKnownProviderEnv(t)
+		clearLLMUXEnv(t)
+		t.Setenv("DATABASE_URL", "postgres://shared")
+		t.Setenv("LLMUX_POSTGRES_SCHEMA", "llmux_custom")
+		c, err := Load("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.PostgresSchema != "llmux_custom" {
+			t.Errorf("PostgresSchema = %q, want llmux_custom", c.PostgresSchema)
+		}
+	})
+
+	t.Run("DATABASE_URL overrides a config-file postgres DSN", func(t *testing.T) {
+		clearKnownProviderEnv(t)
+		clearLLMUXEnv(t)
+		path := writeTempConfig(t, &Config{
+			Server:   ServerConfig{Addr: ":4000"},
+			Postgres: "postgres://file",
+		})
+		t.Setenv("DATABASE_URL", "postgres://shared")
+		c, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Postgres != "postgres://shared" {
+			t.Errorf("Postgres = %q, want env to override file", c.Postgres)
+		}
+		if c.PostgresSchema != "llmux" {
+			t.Errorf("PostgresSchema = %q, want default llmux", c.PostgresSchema)
+		}
+	})
 }
 
 func TestApplyEnv_SocketAndBadSyncInterval(t *testing.T) {

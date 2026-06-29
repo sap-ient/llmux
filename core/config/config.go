@@ -27,7 +27,19 @@ type Config struct {
 
 	// Postgres DSN. When set, keys/spend/budgets live in Postgres (correct
 	// across replicas) instead of in-memory/file.
+	//
+	// The DSN is resolved (later wins) from: this field -> env LLMUX_POSTGRES
+	// (legacy, product-specific fallback) -> env DATABASE_URL -> env
+	// VULOS_DATABASE_URL (the shared Neon DSN; preferred for cloud
+	// consolidation). When the shared DSN is used, all llmux tables live under a
+	// dedicated schema (PostgresSchema, default "llmux") so llmux can share one
+	// database with the other Vulos products without name collisions.
 	Postgres string `json:"postgres"`
+	// PostgresSchema is the Postgres schema that holds llmux's tables. It lets
+	// llmux share one database (e.g. a single Neon database) with other products.
+	// Empty defaults to "llmux" whenever Postgres is set. Resolved from env
+	// LLMUX_POSTGRES_SCHEMA.
+	PostgresSchema string `json:"postgres_schema"`
 	// Redis address (host:port). When set, rate limiting and (if caching is
 	// enabled) the response cache use Redis — correct across replicas.
 	Redis string `json:"redis"`
@@ -377,6 +389,9 @@ func (c *Config) merge(o *Config) {
 	if o.Postgres != "" {
 		c.Postgres = o.Postgres
 	}
+	if o.PostgresSchema != "" {
+		c.PostgresSchema = o.PostgresSchema
+	}
 	if o.Redis != "" {
 		c.Redis = o.Redis
 	}
@@ -441,8 +456,29 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("LLMUX_LOG_LEVEL"); v != "" {
 		c.LogLevel = v
 	}
+	// Postgres DSN resolution (later wins). LLMUX_POSTGRES is the legacy,
+	// product-specific var and remains a working fallback. DATABASE_URL is the
+	// standard shared DSN; VULOS_DATABASE_URL is the Vulos-specific shared DSN
+	// and wins over both so a deployment can point llmux at a different database
+	// than a generic DATABASE_URL when needed. Any shared DSN is preferred over
+	// LLMUX_POSTGRES (cloud consolidation onto one Neon database).
 	if v := os.Getenv("LLMUX_POSTGRES"); v != "" {
 		c.Postgres = v
+	}
+	if v := os.Getenv("DATABASE_URL"); v != "" {
+		c.Postgres = v
+	}
+	if v := os.Getenv("VULOS_DATABASE_URL"); v != "" {
+		c.Postgres = v
+	}
+	if v := os.Getenv("LLMUX_POSTGRES_SCHEMA"); v != "" {
+		c.PostgresSchema = v
+	}
+	// Whenever Postgres is in play, default the schema to "llmux" so tables live
+	// in a dedicated namespace and never collide with other products sharing the
+	// database.
+	if c.Postgres != "" && c.PostgresSchema == "" {
+		c.PostgresSchema = "llmux"
 	}
 	if v := os.Getenv("LLMUX_REDIS"); v != "" {
 		c.Redis = v

@@ -22,7 +22,10 @@ keys, and the pricing catalog.
 | `LLMUX_CONFIG` | Path to the JSON config file |
 | `LLMUX_ADDR` | Listen address (default `:4000`) |
 | `LLMUX_MASTER_KEY` | Admin/master key for `/admin`, `/metrics` |
-| `LLMUX_POSTGRES` | Postgres DSN (virtual keys + spend) |
+| `VULOS_DATABASE_URL` | Shared Postgres DSN (Vulos-specific; **preferred**). Virtual keys + spend live under schema `llmux`. See below. |
+| `DATABASE_URL` | Shared Postgres DSN (standard). Same effect as `VULOS_DATABASE_URL`; lower precedence. |
+| `LLMUX_POSTGRES` | Postgres DSN (virtual keys + spend). Legacy fallback — used only if no shared DSN is set. |
+| `LLMUX_POSTGRES_SCHEMA` | Postgres schema for llmux's tables (default `llmux`). |
 | `LLMUX_REDIS` | Redis address (rate limits + shared cache) |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, … | Provider credentials, referenced by `api_key_env` in config |
 | `LLMUX_CP_URL`, `LLMUX_CP_SECRET` | Optional control-plane URL + shared secret (see [Control-plane seam](control-plane.md)) |
@@ -39,6 +42,38 @@ consistent across them:
 
 - **Postgres** — persists virtual keys and per-key spend.
 - **Redis** — backs per-key rate limits and the shared response cache.
+
+## Postgres DSN & shared-database (cloud consolidation)
+
+llmux resolves its Postgres DSN from several sources so it can either run with its
+own database or share one database (e.g. a single Neon database) with the other
+Vulos products. Resolution order (**later wins**):
+
+1. `postgres` in the config file
+2. `LLMUX_POSTGRES` — legacy, product-specific fallback (kept working)
+3. `DATABASE_URL` — the standard shared DSN
+4. `VULOS_DATABASE_URL` — the Vulos-specific shared DSN (highest precedence)
+
+A shared DSN (`DATABASE_URL` / `VULOS_DATABASE_URL`) is therefore **preferred**
+over `LLMUX_POSTGRES`. With **no** DSN set at all, llmux uses its in-memory /
+embedded default (single-replica; no external dependency) — unchanged.
+
+**Dedicated schema.** Whenever Postgres is in use, all of llmux's tables live
+under a dedicated schema (default **`llmux`**, override with
+`LLMUX_POSTGRES_SCHEMA` or `postgres_schema` in the config file). The schema is
+created automatically (`CREATE SCHEMA IF NOT EXISTS`) and the keys table is
+created as `llmux.llmux_keys`. This lets llmux share one database with the other
+products without name collisions.
+
+```bash
+# Share the Vulos Neon database; llmux's tables go under schema "llmux".
+DATABASE_URL='postgres://user:pass@ep-xyz.eu-central-1.aws.neon.tech/vulos?sslmode=require' ./dist/llmux
+```
+
+**Keys hashed at rest.** Bearer tokens are never stored in plaintext: the
+`llmux.llmux_keys.key` column holds `sha256(token)` (and Redis rate-limit keys
+use the same hash), so a database dump never yields live credentials. This holds
+on the shared-schema path too.
 
 ## Related
 

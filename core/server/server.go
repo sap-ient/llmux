@@ -91,12 +91,16 @@ func New(cfg *config.Config) (*Server, error) {
 		if rdb != nil {
 			lim = keys.NewRedisLimiter(rdb)
 		}
-		pg, err := keys.NewPGStore(context.Background(), cfg.Postgres, cfg.Keys, lim)
+		pg, err := keys.NewPGStore(context.Background(), cfg.Postgres, cfg.PostgresSchema, cfg.Keys, lim)
 		if err != nil {
 			return nil, err
 		}
 		keyStore = pg
-		log.Printf("llmux: keys/spend in Postgres")
+		schema := cfg.PostgresSchema
+		if schema == "" {
+			schema = keys.DefaultSchema
+		}
+		log.Printf("llmux: keys/spend in Postgres (schema %s)", schema)
 	case cfg.KeyStorePath != "":
 		fs, err := keys.NewFileStore(cfg.Keys, cfg.KeyStorePath)
 		if err != nil {

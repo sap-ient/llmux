@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/llmux/llmux/core/config"
 	"github.com/redis/go-redis/v9"
@@ -21,6 +22,29 @@ func testDSN(t *testing.T) string {
 	return dsn
 }
 
+// testSchema is the dedicated schema integration tests run against, mirroring
+// the production default ("llmux") so the shared-database path is exercised.
+const testSchema = "llmux"
+
+// qualifiedTable is the fully-qualified, sanitized table identifier used by the
+// store under testSchema.
+func qualifiedTable() string {
+	return pgx.Identifier{testSchema, "llmux_keys"}.Sanitize()
+}
+
+// resetSchema drops the test schema (and its tables) for a clean slate.
+func resetSchema(t *testing.T, ctx context.Context, dsn string) {
+	t.Helper()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", pgx.Identifier{testSchema}.Sanitize())); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestPGStorePersistsAcrossInstances proves budgets/spend survive a restart and
 // are shared by another instance (the multi-replica correctness property).
 func TestPGStorePersistsAcrossInstances(t *testing.T) {
@@ -28,15 +52,10 @@ func TestPGStorePersistsAcrossInstances(t *testing.T) {
 	ctx := context.Background()
 
 	// Clean slate.
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool.Exec(ctx, "DROP TABLE IF EXISTS llmux_keys")
-	pool.Close()
+	resetSchema(t, ctx, dsn)
 
 	cfgs := []config.KeyConfig{{Key: "sk-pg", Name: "team", BudgetUSD: 1.0, AllowedModels: []string{"gpt-4o"}}}
-	s1, err := NewPGStore(ctx, dsn, cfgs, nil)
+	s1, err := NewPGStore(ctx, dsn, testSchema, cfgs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +74,7 @@ func TestPGStorePersistsAcrossInstances(t *testing.T) {
 	s1.AddSpend("sk-pg", 0.6) // total 1.2
 
 	// A second instance (simulating another replica / restart) sees the spend.
-	s2, err := NewPGStore(ctx, dsn, cfgs, nil)
+	s2, err := NewPGStore(ctx, dsn, testSchema, cfgs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,16 +97,11 @@ func TestPGStoreKeyHashedAtRest(t *testing.T) {
 	dsn := testDSN(t)
 	ctx := context.Background()
 
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool.Exec(ctx, "DROP TABLE IF EXISTS llmux_keys")
-	pool.Close()
+	resetSchema(t, ctx, dsn)
 
 	const rawToken = "sk-at-rest-secret"
 	cfgs := []config.KeyConfig{{Key: rawToken, Name: "atrest", BudgetUSD: 1.0}}
-	s, err := NewPGStore(ctx, dsn, cfgs, nil)
+	s, err := NewPGStore(ctx, dsn, testSchema, cfgs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,14 +114,15 @@ func TestPGStoreKeyHashedAtRest(t *testing.T) {
 	}
 
 	// Directly inspect the Postgres row: the "key" column must hold the hash,
-	// not the raw token.
+	// not the raw token. Read from the schema-qualified table to prove the table
+	// really lives under the dedicated schema (shared-database path).
 	p2, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer p2.Close()
 
-	rows, err := p2.Query(ctx, "SELECT key FROM llmux_keys")
+	rows, err := p2.Query(ctx, fmt.Sprintf("SELECT key FROM %s", qualifiedTable()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,6 +170,56 @@ func TestRedisLimiterKeyHashedAtRest(t *testing.T) {
 		if !strings.Contains(k, HashToken(rawToken)) {
 			t.Fatalf("Redis key does not contain expected hash: %q", k)
 		}
+	}
+}
+
+// TestPGStoreUsesDedicatedSchema proves that table creation lands under the
+// dedicated "llmux" schema (the cloud-consolidation property: llmux shares one
+// database with other products without colliding in public). It also exercises
+// the schema default: passing "" must resolve to DefaultSchema.
+func TestPGStoreUsesDedicatedSchema(t *testing.T) {
+	dsn := testDSN(t)
+	ctx := context.Background()
+
+	resetSchema(t, ctx, dsn)
+
+	cfgs := []config.KeyConfig{{Key: "sk-schema", Name: "schema-test", BudgetUSD: 1.0}}
+	// Empty schema must default to DefaultSchema ("llmux").
+	s, err := NewPGStore(ctx, dsn, "", cfgs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if s.schema != DefaultSchema {
+		t.Fatalf("schema = %q, want default %q", s.schema, DefaultSchema)
+	}
+
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	// The table must exist under the "llmux" schema...
+	var inLlmux bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.tables
+		WHERE table_schema=$1 AND table_name='llmux_keys')`, DefaultSchema).Scan(&inLlmux); err != nil {
+		t.Fatal(err)
+	}
+	if !inLlmux {
+		t.Fatalf("table llmux_keys not found under schema %q", DefaultSchema)
+	}
+
+	// ...and must NOT have been created in public.
+	var inPublic bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.tables
+		WHERE table_schema='public' AND table_name='llmux_keys')`).Scan(&inPublic); err != nil {
+		t.Fatal(err)
+	}
+	if inPublic {
+		t.Fatal("table llmux_keys leaked into public schema")
 	}
 }
 
