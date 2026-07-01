@@ -168,6 +168,12 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req *openai.
 	// Try targets until one begins streaming; failover only before first chunk.
 	var lastErr error
 	for _, t := range res.All() {
+		// Sovereignty gate (see dispatchUnary): skip a blocked non-local target
+		// before any connection; a local fallback may still stream.
+		if err := s.enforceSovereignty(t.Provider.Name()); err != nil {
+			lastErr = err
+			continue
+		}
 		// Resolve BYOK vs central per target so the right key is used and the
 		// metering decision follows the provider that actually serves.
 		callCtx, byok := s.resolveCredential(r.Context(), t.Provider.Name())

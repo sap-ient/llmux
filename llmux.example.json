@@ -16,8 +16,12 @@
   "byok": { "kek": "", "kek_env": "LLMUX_BYOK_KEK", "store_path": "byok.json" },
   "_comment_byok": "OPTIONAL per-account 'bring your own key'. When a 32-byte KEK is present (prefer env LLMUX_BYOK_KEK; raw 32 bytes, 64-char hex, or base64) accounts can register their OWN provider keys, encrypted at rest with AES-256-GCM. A request for a provider the account has a BYOK key for is served with that key and is NOT metered or billed; everything else uses the central provider keys above and is metered. Manage keys via the master-key-gated PUT/DELETE/GET /admin/byok/{account}[/{provider}]. Leave kek empty to disable BYOK (every request uses central keys). See docs/LLM-ACCESS.md.",
 
+  "_comment_sovereignty": "SOVEREIGNTY GATE: by default llmux only calls model backends that run on THIS box (loopback / unix-socket base URLs, e.g. Ollama or llama.cpp — classified 'local'). Any provider whose base_url is a remote endpoint ('egress') is DENIED at dispatch with a 403 sovereignty_error and never dialed — nothing leaves the box unless you say so. To permit a specific remote/brokered endpoint, set \"allow_egress\": true on that provider (explicit + logged/labeled). A local backend is also auto-detected from OLLAMA_HOST or LLMUX_LOCAL_BASE_URL as a passthrough provider named 'local', and becomes the catch-all route when no routes are configured. See core/sovereign.",
+
   "providers": [
-    { "name": "openai",     "type": "passthrough", "base_url": "https://api.openai.com/v1",            "api_key_env": "OPENAI_API_KEY" },
+    { "name": "local",      "type": "passthrough", "base_url": "http://localhost:11434/v1",            "api_key_env": "LLMUX_LOCAL_API_KEY", "_comment": "On-box sovereign default (Ollama/llama.cpp OpenAI-compatible server). Loopback => always allowed, no opt-in needed." },
+    { "name": "openai",     "type": "passthrough", "base_url": "https://api.openai.com/v1",            "api_key_env": "OPENAI_API_KEY", "_comment": "Remote => BLOCKED unless allow_egress is set." },
+    { "name": "broker",     "type": "passthrough", "base_url": "https://broker.example.com/v1",         "api_key_env": "BROKER_API_KEY", "allow_egress": true, "_comment": "Explicitly-opted-in privacy-brokered egress endpoint." },
     { "name": "anthropic",  "type": "anthropic",   "base_url": "https://api.anthropic.com/v1",          "api_key_env": "ANTHROPIC_API_KEY" },
     { "name": "gemini",     "type": "gemini",      "base_url": "https://generativelanguage.googleapis.com/v1beta", "api_key_env": "GEMINI_API_KEY" },
     { "name": "deepseek",   "type": "passthrough", "base_url": "https://api.deepseek.com/v1",           "api_key_env": "DEEPSEEK_API_KEY" },

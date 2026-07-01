@@ -28,6 +28,7 @@ import (
 	"github.com/llmux/llmux/core/provider"
 	"github.com/llmux/llmux/core/providers"
 	"github.com/llmux/llmux/core/router"
+	"github.com/llmux/llmux/core/sovereign"
 )
 
 // Server is the llmux gateway.
@@ -35,6 +36,7 @@ type Server struct {
 	cfg              *config.Config
 	registry         *provider.Registry
 	router           *router.Router
+	sovereign        *sovereign.Policy
 	keys             keys.Store
 	identity         Identity
 	budget           BudgetGate
@@ -112,10 +114,17 @@ func New(cfg *config.Config) (*Server, error) {
 		keyStore = keys.NewMemStore(cfg.Keys)
 	}
 
+	// Sovereignty policy: classify every provider local vs egress and label the
+	// posture at startup. This is the enforcement source of truth for "nothing
+	// leaves the box unless you say so".
+	sov := sovereign.NewPolicy(cfg.Providers)
+	logSovereignty(sov)
+
 	s := &Server{
 		cfg:            cfg,
 		registry:       reg,
 		router:         router.New(cfg.Routes, reg, catalog),
+		sovereign:      sov,
 		keys:           keyStore,
 		identity:       staticIdentity{keys: keyStore},
 		budget:         newStaticBudgetGate(keyStore),
@@ -412,15 +421,23 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 		return
 	}
-	provs := make([]map[string]string, 0, len(s.cfg.Providers))
+	provs := make([]map[string]any, 0, len(s.cfg.Providers))
 	for _, p := range s.cfg.Providers {
-		provs = append(provs, map[string]string{
+		d := s.sovereign.Check(p.Name)
+		provs = append(provs, map[string]any{
 			"name": p.Name, "type": string(p.Type), "stability": providers.Stability(p.Type),
+			// Sovereignty posture: where this provider's traffic goes and whether
+			// it may be called at all.
+			"locality": string(d.Locality), "egress_allowed": d.Allowed,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":    "ok",
 		"providers": provs,
+		"sovereignty": map[string]any{
+			"default":        "local",
+			"egress_allowed": s.sovereign.AllowedEgress(),
+		},
 	})
 }
 

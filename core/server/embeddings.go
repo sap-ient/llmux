@@ -33,6 +33,11 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := res.Primary
+	// Sovereignty gate: deny embeddings to a non-local provider without opt-in.
+	if err := s.enforceSovereignty(t.Provider.Name()); err != nil {
+		writeProviderError(w, err)
+		return
+	}
 	// BYOK vs central for the routed provider: inject the account's own key when
 	// set, and mark the request unmetered.
 	callCtx, byok := s.resolveCredential(r.Context(), t.Provider.Name())

@@ -38,6 +38,7 @@ type Metrics struct {
 	inflight      int64
 	upstreamErr   int64
 	cacheHits     int64
+	egressBlocked int64
 }
 
 // NewMetrics builds an empty metrics registry.
@@ -52,6 +53,7 @@ func (m *Metrics) incRequest(path string, status int) {
 func (m *Metrics) addInflight(d int64) { atomic.AddInt64(&m.inflight, d) }
 func (m *Metrics) incUpstreamErr()     { atomic.AddInt64(&m.upstreamErr, 1) }
 func (m *Metrics) incCacheHit()        { atomic.AddInt64(&m.cacheHits, 1) }
+func (m *Metrics) incEgressBlocked()   { atomic.AddInt64(&m.egressBlocked, 1) }
 
 // statusRecorder captures the response status for metrics.
 type statusRecorder struct {
@@ -118,6 +120,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "# HELP llmux_cache_hits_total Exact-cache hits.")
 	fmt.Fprintln(w, "# TYPE llmux_cache_hits_total counter")
 	fmt.Fprintf(w, "llmux_cache_hits_total %d\n", atomic.LoadInt64(&s.metrics.cacheHits))
+	fmt.Fprintln(w, "# HELP llmux_egress_blocked_total Requests denied by the sovereignty gate (non-local provider without opt-in).")
+	fmt.Fprintln(w, "# TYPE llmux_egress_blocked_total counter")
+	fmt.Fprintf(w, "llmux_egress_blocked_total %d\n", atomic.LoadInt64(&s.metrics.egressBlocked))
 }
 
 func atoiSafe(s string) int {

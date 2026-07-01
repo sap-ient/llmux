@@ -16,6 +16,12 @@ func clearKnownProviderEnv(t *testing.T) {
 		t.Setenv(kp.env, "")
 		os.Unsetenv(kp.env)
 	}
+	// Also clear the on-box local-backend detectors so provider auto-detection
+	// starts from a clean slate regardless of the host environment.
+	for _, k := range []string{"OLLAMA_HOST", "LLMUX_LOCAL_BASE_URL"} {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
 }
 
 // clearLLMUXEnv unsets the LLMUX_* overrides applyEnv reads.
@@ -574,5 +580,71 @@ func TestString_NoSecrets(t *testing.T) {
 	}
 	if !strings.Contains(s, ":4000") {
 		t.Errorf("String() missing addr: %s", s)
+	}
+}
+
+// TestLocalBackendAutoDetect proves the sovereign default: a local model server
+// discovered from the environment is registered as a passthrough provider named
+// "local", and (absent explicit routes) becomes the catch-all route — so any
+// model resolves on-box with zero config.
+func TestLocalBackendAutoDetect(t *testing.T) {
+	clearKnownProviderEnv(t)
+	clearLLMUXEnv(t)
+	t.Setenv("OLLAMA_HOST", "127.0.0.1:11434")
+	t.Setenv("LLMUX_LOCAL_BASE_URL", "")
+	os.Unsetenv("LLMUX_LOCAL_BASE_URL")
+
+	c, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	p, ok := c.ProviderByName(LocalProviderName)
+	if !ok {
+		t.Fatalf("expected auto-detected %q provider", LocalProviderName)
+	}
+	if p.BaseURL != "http://127.0.0.1:11434/v1" {
+		t.Fatalf("local base_url = %q, want http://127.0.0.1:11434/v1", p.BaseURL)
+	}
+	if len(c.Routes) != 1 || c.Routes[0].Model != "*" || c.Routes[0].Provider != LocalProviderName {
+		t.Fatalf("expected catch-all route to local; got %+v", c.Routes)
+	}
+}
+
+// TestLocalBackendExplicitURLWins proves LLMUX_LOCAL_BASE_URL overrides OLLAMA_HOST.
+func TestLocalBackendExplicitURLWins(t *testing.T) {
+	clearKnownProviderEnv(t)
+	clearLLMUXEnv(t)
+	t.Setenv("OLLAMA_HOST", "127.0.0.1:11434")
+	t.Setenv("LLMUX_LOCAL_BASE_URL", "http://localhost:8080/v1")
+
+	c, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	p, _ := c.ProviderByName(LocalProviderName)
+	if p.BaseURL != "http://localhost:8080/v1" {
+		t.Fatalf("explicit LLMUX_LOCAL_BASE_URL should win; got %q", p.BaseURL)
+	}
+}
+
+// TestNoLocalBackendNoAutoRoute proves that with no local backend configured,
+// no "local" provider and no catch-all route are injected.
+func TestNoLocalBackendNoAutoRoute(t *testing.T) {
+	clearKnownProviderEnv(t)
+	clearLLMUXEnv(t)
+	t.Setenv("OLLAMA_HOST", "")
+	os.Unsetenv("OLLAMA_HOST")
+	t.Setenv("LLMUX_LOCAL_BASE_URL", "")
+	os.Unsetenv("LLMUX_LOCAL_BASE_URL")
+
+	c, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := c.ProviderByName(LocalProviderName); ok {
+		t.Fatalf("no local backend env set, but a local provider was registered")
+	}
+	if len(c.Routes) != 0 {
+		t.Fatalf("expected no auto routes; got %+v", c.Routes)
 	}
 }

@@ -201,6 +201,13 @@ type ProviderConfig struct {
 	APIKey    string            `json:"api_key"`
 	APIKeyEnv string            `json:"api_key_env"`
 	Headers   map[string]string `json:"headers,omitempty"`
+
+	// AllowEgress is the operator's explicit opt-in to let this provider send
+	// data OFF the box. It is only meaningful for providers whose base URL is a
+	// non-local (remote) endpoint; local (loopback / unix-socket) providers are
+	// always allowed. This is llmux's sovereignty gate: without it, a non-local
+	// provider is DENIED at dispatch and nothing leaves the box. See core/sovereign.
+	AllowEgress bool `json:"allow_egress,omitempty"`
 }
 
 // ResolveKey returns the effective API key, reading APIKeyEnv if APIKey is empty.
@@ -309,6 +316,16 @@ var knownProviders = []knownProvider{
 }
 
 func (c *Config) autoDetectProviders() {
+	// Sovereign default: an on-box local model backend. Detected first so it is
+	// the natural primary. Ollama and llama.cpp both expose an OpenAI-compatible
+	// endpoint, so a passthrough provider reaches them with zero adapter code.
+	if base := localBackendURL(); base != "" {
+		c.Providers = append(c.Providers, ProviderConfig{
+			Name: LocalProviderName, Type: TypePassthrough, BaseURL: base,
+			// Local servers usually need no key; allow an optional one.
+			APIKeyEnv: "LLMUX_LOCAL_API_KEY",
+		})
+	}
 	for _, kp := range knownProviders {
 		if os.Getenv(kp.env) == "" {
 			continue
@@ -317,6 +334,28 @@ func (c *Config) autoDetectProviders() {
 			Name: kp.name, Type: kp.typ, BaseURL: kp.baseURL, APIKeyEnv: kp.env,
 		})
 	}
+}
+
+// LocalProviderName is the conventional name of the auto-detected on-box
+// sovereign backend.
+const LocalProviderName = "local"
+
+// localBackendURL resolves the on-box model server's OpenAI-compatible base URL
+// from the environment, or "" if none is configured. Resolution (later wins):
+//   - OLLAMA_HOST (host[:port] or URL) -> "<host>/v1"
+//   - LLMUX_LOCAL_BASE_URL (explicit, full base URL incl. /v1)
+func localBackendURL() string {
+	base := ""
+	if v := strings.TrimSpace(os.Getenv("OLLAMA_HOST")); v != "" {
+		if !strings.Contains(v, "://") {
+			v = "http://" + v
+		}
+		base = strings.TrimRight(v, "/") + "/v1"
+	}
+	if v := strings.TrimSpace(os.Getenv("LLMUX_LOCAL_BASE_URL")); v != "" {
+		base = v
+	}
+	return base
 }
 
 // Load builds the configuration from defaults, an optional JSON file at path
@@ -337,10 +376,25 @@ func Load(path string) (*Config, error) {
 		}
 	}
 	c.applyEnv()
+	c.applyDefaults()
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// applyDefaults fills in convenience defaults after config + env are resolved.
+// Sovereign default routing: if a local on-box provider is configured but no
+// routes are, add a catch-all route to it. This makes "runs on YOUR instance"
+// the zero-config default — any model name resolves to the local backend, and
+// no request can silently reach a remote endpoint.
+func (c *Config) applyDefaults() {
+	if len(c.Routes) > 0 {
+		return
+	}
+	if _, ok := c.ProviderByName(LocalProviderName); ok {
+		c.Routes = append(c.Routes, RouteConfig{Model: "*", Provider: LocalProviderName})
+	}
 }
 
 func (c *Config) merge(o *Config) {
